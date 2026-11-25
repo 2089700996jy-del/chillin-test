@@ -1,0 +1,23 @@
+{
+  "name": "chillin-e2e-suite",
+  "version": "1.0.0",
+  "description": "Chillin 数字花园独立全链路 E2E 体验验证与主动找 Bug 测试工程",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:p0": "playwright test tests/01-golden-flows.spec.mjs",
+    "test:pwa": "playwright test tests/02-pwa-offline-sync.spec.mjs",
+    "test:chaos": "playwright test tests/04-chaos-bug-hunter.spec.mjs",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "axe-core": "^4.10.3"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
