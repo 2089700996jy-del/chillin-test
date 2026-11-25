@@ -233,6 +233,10 @@ export async function runAxeScan(page, label) {
     const violations = await page.evaluate(async () => {
         const res = await window.axe.run(document, {
             runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] },
+            // 产品明确决策：PWA 移动端刻意禁用双指缩放以保持原生应用手感
+            rules: {
+                'meta-viewport': { enabled: false },
+            },
         });
         return res.violations.map((v) => ({
             id: v.id,
