@@ -1,0 +1,28 @@
+{
+  "version": "1.0.0",
+  "targetProduct": "chillin",
+  "invariants": [
+    { "id": "INV-01", "attribute": "correctness", "summary": "写入确认的资源内容、标签、双链关系与服务端存储完全一致" },
+    { "id": "INV-02", "attribute": "correctness", "summary": "AI RAG 检索与回答引用仅来源于当前用户的真实记忆" },
+    { "id": "INV-03", "attribute": "durability", "summary": "已确认落库的数据在刷新、重登、新设备首登及重启后 100% 可读" },
+    { "id": "INV-04", "attribute": "durability", "summary": "全量导出（ZIP/JSON）+ R2 媒体恢复到干净库后完整可解析" },
+    { "id": "INV-05", "attribute": "consistency", "summary": "离线修改重连后必自动补偿上云，不因网络切换静默丢弃" },
+    { "id": "INV-06", "attribute": "consistency", "summary": "双端并发修改同一资源必触发冲突裁决或确定性收敛，禁止静默覆盖" },
+    { "id": "INV-07", "attribute": "consistency", "summary": "D1 元数据（文件/书籍/软删墓碑）与 R2 实体、本地 IndexedDB 一致" },
+    { "id": "INV-08", "attribute": "reliability", "summary": "同一提醒/天气关怀/ClawBot 入站消息在同一周期内至多投递/消费一次" },
+    { "id": "INV-09", "attribute": "reliability", "summary": "上游故障（500/超时/畸形 JSON）时可降级提示且不锁死账号队列" },
+    { "id": "INV-10", "attribute": "reliability", "summary": "已创建的 Agent 目标与任务状态机不出现无故消失或永久僵尸态" },
+    { "id": "INV-11", "attribute": "security", "summary": "任意账号 B 对账号 A 的 D1/R2/Agent 资源均被拒绝（403/404，绝非 200/500）" },
+    { "id": "INV-12", "attribute": "security", "summary": "撤销单会话或全端登出后旧 Cookie 立即失效（401）" },
+    { "id": "INV-13", "attribute": "security", "summary": "用户输入经清洗与 Trusted Types 约束，不执行 XSS 脚本" },
+    { "id": "INV-14", "attribute": "usability", "summary": "三主题在 Mobile(390x844) 与 Desktop(1280x800) 零横向溢出且符合 WCAG AA" },
+    { "id": "INV-15", "attribute": "usability", "summary": "弱网/防连击/切后台时草稿不丢、导航不锁死、失败可见" }
+  ],
+  "manualAcceptanceBoundaries": [
+    "Real WeChat ClawBot client QR scan & physical delivery",
+    "Real APNs / FCM Web Push delivery on physical phones",
+    "Physical Android/iOS soft-keyboard geometry & OS-level PWA install prompts",
+    "Cloudflare production edge cold-start & global D1 replication lag"
+  ]
+}
+

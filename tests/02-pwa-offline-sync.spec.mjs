@@ -5,7 +5,7 @@ import {
 } from '../src/support/pwa-harness.mjs';
 import { uniqueUser } from '../src/support/test-data.mjs';
 
-test.describe('P1 PWA 离线生命线、增量补偿与双端同步冲突', () => {
+test.describe('P1 PWA 离线生命线、增量补偿与双端同步冲突 @core', () => {
     test('真实 Service Worker 预缓存、断网零白屏启动、离线写作重连自动同步到另一台设备', async ({ browser }) => {
         const user = uniqueUser('pwa');
         const deviceA = await browser.newContext();

@@ -6,6 +6,12 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
+    "test:l2": "node --test tests/l2/*.test.mjs",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:core": "playwright test --grep \"@smoke|@core\"",
+    "test:full": "npm run test:l2 && playwright test",
+    "test:all": "npm run test:l2 && playwright test",
+    "impact": "node scripts/analyze-impact.mjs",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
     "test:p0": "playwright test tests/01-golden-flows.spec.mjs",

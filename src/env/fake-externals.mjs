@@ -4,6 +4,7 @@ import http from 'node:http';
  * Controllable local Fake External Services:
  * 1. DeepSeek/OpenAI-compatible LLM (/v1/chat/completions) with full prompt capture & fault injection
  * 2. Fake iLink WeChat ClawBot protocol server (/ilink/bot/*) for protocol simulation
+ * 3. Fake QWeather (/geo/v2/*, /v7/*), Resend Email (/emails), and Web Push (/push/send)
  */
 export function createFakeExternalsServer() {
     let state = {
@@ -14,6 +15,11 @@ export function createFakeExternalsServer() {
         ilinkSentMessages: [],
         ilinkSendFail: false,
         ilinkGetUpdatesFail: false,
+        weatherScenario: 'calm', // 'calm' | 'rain_storm' | 'error500'
+        emailFail: false,
+        sentEmails: [],
+        pushFail: false,
+        sentPushes: [],
     };
 
     const server = http.createServer(async (req, res) => {
@@ -33,6 +39,8 @@ export function createFakeExternalsServer() {
                 if (patch.clearRequests) {
                     state.requests = [];
                     state.ilinkSentMessages = [];
+                    state.sentEmails = [];
+                    state.sentPushes = [];
                     delete patch.clearRequests;
                 }
                 state = { ...state, ...patch };
@@ -53,6 +61,9 @@ export function createFakeExternalsServer() {
                 count: state.requests.length,
                 requests: state.requests,
                 ilinkSentMessages: state.ilinkSentMessages,
+                weatherScenario: state.weatherScenario,
+                sentEmails: state.sentEmails,
+                sentPushes: state.sentPushes,
             }));
             return;
         }
@@ -208,6 +219,94 @@ export function createFakeExternalsServer() {
             });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ret: 0, msg_id: `fake-reply-${state.ilinkSentMessages.length}` }));
+            return;
+        }
+
+        // ── Fake QWeather Endpoints ──
+        if (url.pathname.startsWith('/geo/v2/') || url.pathname.startsWith('/v7/')) {
+            if (state.weatherScenario === 'error500') {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ code: '500', error: 'Injected QWeather 500 failure' }));
+                return;
+            }
+            const isStorm = state.weatherScenario === 'rain_storm';
+            if (url.pathname === '/geo/v2/city/lookup') {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    code: '200',
+                    location: [{ id: '101010100', name: '北京', adm1: '北京市', adm2: '北京' }],
+                }));
+                return;
+            }
+            if (url.pathname === '/v7/weather/24h') {
+                const hourly = Array.from({ length: 6 }, (_, i) => ({
+                    fxTime: `2026-11-25T0${8 + i}:00+08:00`,
+                    temp: isStorm ? String(18 - i * 3) : '22',
+                    text: isStorm && i >= 1 ? '大雨' : '晴',
+                    precip: isStorm && i >= 1 ? '8.5' : '0.0',
+                }));
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ code: '200', hourly }));
+                return;
+            }
+            if (url.pathname === '/v7/weather/3d') {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    code: '200',
+                    daily: [{
+                        fxDate: '2026-11-25',
+                        tempMax: isStorm ? '18' : '23',
+                        tempMin: isStorm ? '3' : '17',
+                        textDay: isStorm ? '暴雨' : '晴',
+                        textNight: isStorm ? '中雨' : '多云',
+                    }],
+                }));
+                return;
+            }
+            if (url.pathname === '/v7/warning/now') {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    code: '200',
+                    warning: isStorm ? [{ title: '北京市发布暴雨蓝色预警', text: '预计今天白天有强降水' }] : [],
+                }));
+                return;
+            }
+            if (url.pathname === '/v7/indices/1d') {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    code: '200',
+                    daily: [{ type: '5', level: isStorm ? '1' : '2', name: '紫外线指数', text: '适中' }],
+                }));
+                return;
+            }
+        }
+
+        // ── Fake Resend Email & Web Push Endpoints ──
+        if (url.pathname === '/emails' && req.method === 'POST') {
+            if (state.emailFail) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ message: 'Injected Resend failure' }));
+                return;
+            }
+            let body = {};
+            try { body = JSON.parse(rawBody || '{}'); } catch { /* ignore */ }
+            state.sentEmails.push({ to: body.to, subject: body.subject, at: Date.now() });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ id: `fake-email-${state.sentEmails.length}` }));
+            return;
+        }
+
+        if (url.pathname === '/push/send' && req.method === 'POST') {
+            if (state.pushFail) {
+                res.writeHead(502, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Injected Web Push failure' }));
+                return;
+            }
+            let body = {};
+            try { body = JSON.parse(rawBody || '{}'); } catch { /* ignore */ }
+            state.sentPushes.push({ payload: body, at: Date.now() });
+            res.writeHead(201, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
             return;
         }
 

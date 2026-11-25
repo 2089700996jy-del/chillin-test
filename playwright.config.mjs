@@ -24,6 +24,7 @@ const localChrome = resolveLocalChromePath();
 
 export default defineConfig({
     testDir: './tests',
+    testIgnore: [/[\\/]l2[\\/]/],
     timeout: 60_000,
     expect: {
         timeout: 10_000,

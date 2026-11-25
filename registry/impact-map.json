@@ -1,0 +1,93 @@
+{
+  "version": "1.0.0",
+  "defaultTierOnUnknown": "core",
+  "rules": [
+    {
+      "pattern": "^migrations/",
+      "domain": "schema",
+      "recommendedTier": "full",
+      "suites": ["tests/l2/bot-claw.test.mjs", "tests/l2/bot-reminders.test.mjs", "tests/l2/bot-weather.test.mjs", "tests/l2/agent-goals.test.mjs", "tests/01-golden-flows.spec.mjs", "tests/08-rag-and-isolation.spec.mjs"],
+      "reason": "D1 Schema 变更可能影响所有持久化与迁移链路"
+    },
+    {
+      "pattern": "^workers/api\\.js$|^wrangler\\.toml$|^public/_headers$",
+      "domain": "gateway-security",
+      "recommendedTier": "full",
+      "suites": ["tests/01-golden-flows.spec.mjs", "tests/04-chaos-bug-hunter.spec.mjs", "tests/08-rag-and-isolation.spec.mjs", "tests/12-auth-and-cron.spec.mjs"],
+      "reason": "网关路由、触发器或 CSP/Trusted Types 安全头变更"
+    },
+    {
+      "pattern": "^(workers/src/auth\\.js|public/js/auth\\.js)$",
+      "domain": "auth",
+      "recommendedTier": "core",
+      "suites": ["tests/01-golden-flows.spec.mjs", "tests/04-chaos-bug-hunter.spec.mjs", "tests/08-rag-and-isolation.spec.mjs", "tests/12-auth-and-cron.spec.mjs"]
+    },
+    {
+      "pattern": "^(workers/src/garden-sync\\.js|public/js/sync\\.js|public/js/db\\.js|public/sw\\.js|public/js/pwa-update\\.js)$",
+      "domain": "sync-pwa",
+      "recommendedTier": "full",
+      "suites": ["tests/02-pwa-offline-sync.spec.mjs", "tests/09-reader-sync.spec.mjs", "tests/01-golden-flows.spec.mjs"]
+    },
+    {
+      "pattern": "^(workers/src/garden-resources\\.js|workers/src/garden-media\\.js|public/js/notes\\.js|public/js/feeds\\.js|public/js/upload\\.js|public/js/prompts\\.js|public/js/wikilinks\\.js)$",
+      "domain": "garden",
+      "recommendedTier": "core",
+      "suites": ["tests/01-golden-flows.spec.mjs", "tests/08-rag-and-isolation.spec.mjs", "tests/05-audit-migrated.spec.mjs"]
+    },
+    {
+      "pattern": "^(workers/src/garden-books\\.js|public/js/reader\\.js)$",
+      "domain": "reader",
+      "recommendedTier": "core",
+      "suites": ["tests/01-golden-flows.spec.mjs", "tests/09-reader-sync.spec.mjs", "tests/08-rag-and-isolation.spec.mjs"]
+    },
+    {
+      "pattern": "^(workers/src/ai.*|workers/src/rag.*|public/js/echo-ai\\.js)$",
+      "domain": "ai-rag",
+      "recommendedTier": "core",
+      "suites": ["tests/03-ai-and-goals.spec.mjs", "tests/08-rag-and-isolation.spec.mjs"]
+    },
+    {
+      "pattern": "^(workers/src/agent-.*|public/js/agent-goals\\.js)$",
+      "domain": "agent",
+      "recommendedTier": "core",
+      "suites": ["tests/l2/agent-goals.test.mjs", "tests/03-ai-and-goals.spec.mjs", "tests/08-rag-and-isolation.spec.mjs"]
+    },
+    {
+      "pattern": "^workers/src/bot-claw\\.js$",
+      "domain": "bot-claw",
+      "recommendedTier": "core",
+      "suites": ["tests/l2/bot-claw.test.mjs", "tests/12-auth-and-cron.spec.mjs"]
+    },
+    {
+      "pattern": "^workers/src/bot-reminders\\.js$",
+      "domain": "reminders",
+      "recommendedTier": "core",
+      "suites": ["tests/l2/bot-reminders.test.mjs", "tests/07-reminders.spec.mjs"]
+    },
+    {
+      "pattern": "^workers/src/bot-weather\\.js$",
+      "domain": "weather",
+      "recommendedTier": "core",
+      "suites": ["tests/l2/bot-weather.test.mjs"]
+    },
+    {
+      "pattern": "^workers/src/maintenance\\.js$",
+      "domain": "cron",
+      "recommendedTier": "core",
+      "suites": ["tests/12-auth-and-cron.spec.mjs", "tests/l2/bot-claw.test.mjs", "tests/l2/bot-reminders.test.mjs", "tests/l2/bot-weather.test.mjs"]
+    },
+    {
+      "pattern": "^(workers/src/garden-export\\.js|public/js/backup\\.js|scripts/restore-.*\\.mjs)$",
+      "domain": "backup",
+      "recommendedTier": "core",
+      "suites": ["tests/10-backup-restore.spec.mjs"]
+    },
+    {
+      "pattern": "^(public/style\\.css|public/index\\.html|public/app\\.js|public/js/search\\.js|public/js/router\\.js)$",
+      "domain": "ux-a11y",
+      "recommendedTier": "full",
+      "suites": ["tests/04-chaos-bug-hunter.spec.mjs", "tests/11-desktop-web.spec.mjs", "tests/01-golden-flows.spec.mjs"]
+    }
+  ]
+}
+

@@ -5,7 +5,7 @@ import {
 } from '../src/support/pwa-harness.mjs';
 import { uniqueUser, samplePngBuffer, sampleTxtBookBuffer } from '../src/support/test-data.mjs';
 
-test.describe('P0 黄金全链路体验验证 (Mobile PWA)', () => {
+test.describe('P0 黄金全链路体验验证 (Mobile PWA) @smoke @core', () => {
     test('新用户注册、刷新免重登、随手记图文与R2对象可读、双向链接笔记、提示词与阅读器云端同步', async ({ browser }) => {
         const context = await browser.newContext();
         const harness = await attachPwaHarness(context);

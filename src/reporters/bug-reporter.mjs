@@ -1,59 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNTIME_FILE } from '../env/ports.mjs';
+import { RUNTIME_FILE, TEST_ROOT, TMP_DIR } from '../env/ports.mjs';
 import { MONITORING_TAXONOMY } from '../support/pwa-harness.mjs';
-
-const KNOWN_DEFECTS_REGISTRY = [
-    {
-        id: 'BUG-001',
-        severity: 'High',
-        area: 'search.js:166',
-        summary: '点击顶部 #btn-open-global-search 将 PointerEvent 传入 openGlobalSearch，导致 query.startsWith 抛出 TypeError',
-        status: 'Open in chillin',
-    },
-    {
-        id: 'BUG-002',
-        severity: 'High',
-        area: 'auth.js / app.js',
-        summary: '页面刷新恢复会话时 /api/auth/refresh 轮换令牌与并发初始化请求竞态，偶发触发 401',
-        status: 'Open in chillin',
-    },
-    {
-        id: 'BUG-003',
-        severity: 'Medium',
-        area: 'pwa-update.js:277',
-        summary: '首次安装激活 Service Worker 时 controllerchange 触发约 8 秒后自动强制 reload',
-        status: 'Open in chillin',
-    },
-    {
-        id: 'BUG-004',
-        severity: 'Medium',
-        area: 'app.js:197',
-        summary: '随手记发送/交互后 #mobile-bottom-nav 可能保持 inert 状态阻塞移动端 Tab 切换',
-        status: 'Open in chillin',
-    },
-    {
-        id: 'BUG-005',
-        severity: 'Medium',
-        area: 'index.html:80 & style.css',
-        summary: 'index.html SVG path 语法报错；#btn-chip-todo 在日间/深色主题下存在 WCAG 对比度不达标',
-        status: 'Open in chillin',
-    },
-    {
-        id: 'BUG-006',
-        severity: 'High',
-        area: 'workers/src/garden-resources.js',
-        summary: '跨账号越权请求 PUT /api/notes/:id 返回 HTTP 500 Internal Server Error 而非 403/404',
-        status: 'Open in chillin',
-    },
-    {
-        id: 'BUG-007',
-        severity: 'High',
-        area: 'public/js/auth.js & sync.js',
-        summary: '新设备首次登录后 /api/sync/pull 已完成且 D1 已有云端笔记，但 #notes-list-container 仍只显示默认占位笔记，导致跨设备笔记同步与冲突测试在首登后无法即时呈现',
-        status: 'Open in chillin',
-    },
-];
 
 class BugReporter {
     constructor(options = {}) {
@@ -165,13 +113,25 @@ class BugReporter {
         MONITORING_TAXONOMY.allowed.forEach((x) => lines.push(`- ${x}`));
         lines.push(``, `### 未覆盖 / 人工验收边界 (Unchecked / Manual Acceptance)`);
         MONITORING_TAXONOMY.unchecked.forEach((x) => lines.push(`- ${x}`));
+        lines.push(``, `> **提示**：后端模块级协议仿真与状态机集成测试（L2）已剥离至 \`npm run test:l2\`（\`tests/l2/*.test.mjs\`）独立并行执行，不计入本 Playwright E2E 汇总。`);
 
-        lines.push(``, `## 5. 已知缺陷登记表 (Known Defects Registry)`, ``);
-        lines.push(`| 编号 | 严重度 | 位置 | 摘要 | 状态 |`);
-        lines.push(`| :--- | :--- | :--- | :--- | :--- |`);
-        KNOWN_DEFECTS_REGISTRY.forEach((d) => {
-            lines.push(`| ${d.id} | ${d.severity} | \`${d.area}\` | ${d.summary} | ${d.status} |`);
-        });
+        try {
+            const catalogPath = path.join(TEST_ROOT, 'registry/test-catalog.json');
+            const impactPath = path.join(TMP_DIR, 'impact-report.json');
+            if (fs.existsSync(catalogPath)) {
+                const catalog = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+                lines.push(``, `## 5. 演进与覆盖基线`);
+                lines.push(`- **已登记测试套件**: ${catalog.suites?.length || 0} 个（L2 + L3/L4）`);
+            }
+            if (fs.existsSync(impactPath)) {
+                const impact = JSON.parse(fs.readFileSync(impactPath, 'utf8'));
+                lines.push(`- **最近变更影响分析**: SHA \`${impact.chillinSha}\` | 推荐分级 \`${impact.recommendedTier}\` | 命中域: ${(impact.matchedDomains || []).join(', ') || '无'}`);
+                const unmapped = impact.gaps?.unmappedProductionFiles || [];
+                if (unmapped.length) {
+                    lines.push(`- **未映射生产文件告警**: \`${unmapped.join('`, `')}\``);
+                }
+            }
+        } catch { /* ignore metadata read errors */ }
 
         fs.mkdirSync(path.dirname(this.outputFile), { recursive: true });
         fs.writeFileSync(this.outputFile, lines.join('\n'), 'utf8');

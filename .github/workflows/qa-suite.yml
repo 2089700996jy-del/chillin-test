@@ -1,0 +1,87 @@
+name: Chillin QA Suite
+
+# 支持手动分级触发、夜间全量回归，以及未来跨仓库 repository_dispatch 联动。
+# 注意：使用跨仓库自动拉取私有 chillin 仓库或 repository_dispatch 时，需配置 CHILLIN_READ_TOKEN。
+
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Execution tier (smoke | core | full)'
+        required: true
+        default: 'core'
+        type: choice
+        options: [smoke, core, full]
+      chillin_ref:
+        description: 'Chillin branch or SHA'
+        required: false
+        default: 'main'
+  schedule:
+    - cron: '0 19 * * *' # 北京时间凌晨 03:00 夜间全量回归
+  repository_dispatch:
+    types: [chillin-updated]
+
+jobs:
+  qa-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout chillin-test
+        uses: actions/checkout@v4
+        with:
+          path: chillin-test
+
+      - name: Checkout chillin (target product)
+        uses: actions/checkout@v4
+        with:
+          repository: 2089700996jy-del/chillin
+          ref: ${{ github.event.client_payload.sha || github.event.inputs.chillin_ref || 'main' }}
+          fetch-depth: 2
+          path: chillin
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          cd chillin && npm ci
+          cd ../chillin-test && npm ci
+          npx playwright install chromium
+
+      - name: Analyze change impact
+        working-directory: chillin-test
+        env:
+          CHILLIN_ROOT: ${{ github.workspace }}/chillin
+        run: node scripts/analyze-impact.mjs
+
+      - name: Run L2 integration tests
+        working-directory: chillin-test
+        env:
+          CHILLIN_ROOT: ${{ github.workspace }}/chillin
+        run: npm run test:l2
+
+      - name: Run Playwright E2E suite
+        working-directory: chillin-test
+        env:
+          CHILLIN_ROOT: ${{ github.workspace }}/chillin
+        run: |
+          TIER="${{ github.event.inputs.tier || (github.event_name == 'schedule' && 'full' || 'core') }}"
+          if [ "$TIER" = "smoke" ]; then
+            npm run test:smoke
+          elif [ "$TIER" = "core" ]; then
+            npm run test:core
+          else
+            npm test
+          fi
+
+      - name: Upload QA report & artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chillin-qa-report
+          path: |
+            chillin-test/test-results/bug-report.md
+            chillin-test/playwright-report/
+            chillin-test/.tmp/impact-report.json
+

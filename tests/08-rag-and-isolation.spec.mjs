@@ -6,7 +6,7 @@ import {
 } from '../src/support/pwa-harness.mjs';
 import { uniqueUser, samplePngBuffer, sampleTxtBookBuffer } from '../src/support/test-data.mjs';
 
-test.describe('RAG 多资源召回与跨账号权限隔离测试', () => {
+test.describe('RAG 多资源召回与跨账号权限隔离测试 @core', () => {
     test.afterEach(async () => {
         await setExternalFaultMode({ mode: 'ok', delayMs: 0, clearRequests: true }).catch(() => {});
     });

@@ -1,0 +1,141 @@
+{
+  "version": "1.0.0",
+  "suites": [
+    {
+      "id": "TC-GARDEN-01",
+      "file": "tests/01-golden-flows.spec.mjs",
+      "layer": "L3",
+      "priority": "P0",
+      "tiers": ["smoke", "core", "full"],
+      "domains": ["auth", "garden", "media", "reader"],
+      "invariants": ["INV-01", "INV-03", "INV-14"]
+    },
+    {
+      "id": "TC-SYNC-01",
+      "file": "tests/02-pwa-offline-sync.spec.mjs",
+      "layer": "L3",
+      "priority": "P0",
+      "tiers": ["core", "full"],
+      "domains": ["pwa", "sync"],
+      "invariants": ["INV-03", "INV-05", "INV-06", "INV-07"]
+    },
+    {
+      "id": "TC-AI-01",
+      "file": "tests/03-ai-and-goals.spec.mjs",
+      "layer": "L3+L4",
+      "priority": "P1",
+      "tiers": ["full"],
+      "domains": ["ai", "agent"],
+      "invariants": ["INV-02", "INV-09", "INV-10"]
+    },
+    {
+      "id": "TC-UX-01",
+      "file": "tests/04-chaos-bug-hunter.spec.mjs",
+      "layer": "L3+L4",
+      "priority": "P1",
+      "tiers": ["full"],
+      "domains": ["ux", "security", "auth", "a11y"],
+      "invariants": ["INV-13", "INV-14", "INV-15"]
+    },
+    {
+      "id": "TC-AUDIT-01",
+      "file": "tests/05-audit-migrated.spec.mjs",
+      "layer": "L3",
+      "priority": "P2",
+      "tiers": ["full"],
+      "domains": ["garden", "search"],
+      "invariants": ["INV-01", "INV-15"]
+    },
+    {
+      "id": "TC-REM-HTTP-01",
+      "file": "tests/07-reminders.spec.mjs",
+      "layer": "L3",
+      "priority": "P1",
+      "tiers": ["full"],
+      "domains": ["reminders"],
+      "invariants": ["INV-09", "INV-15"]
+    },
+    {
+      "id": "TC-SEC-01",
+      "file": "tests/08-rag-and-isolation.spec.mjs",
+      "layer": "L3+L4",
+      "priority": "P0",
+      "tiers": ["core", "full"],
+      "domains": ["security", "rag", "garden", "media", "reader", "agent"],
+      "invariants": ["INV-02", "INV-11"]
+    },
+    {
+      "id": "TC-READ-01",
+      "file": "tests/09-reader-sync.spec.mjs",
+      "layer": "L3",
+      "priority": "P1",
+      "tiers": ["full"],
+      "domains": ["reader", "sync"],
+      "invariants": ["INV-01", "INV-07"]
+    },
+    {
+      "id": "TC-BAK-01",
+      "file": "tests/10-backup-restore.spec.mjs",
+      "layer": "L3",
+      "priority": "P1",
+      "tiers": ["full"],
+      "domains": ["backup", "media", "reader"],
+      "invariants": ["INV-04"]
+    },
+    {
+      "id": "TC-DESK-01",
+      "file": "tests/11-desktop-web.spec.mjs",
+      "layer": "L3",
+      "priority": "P1",
+      "tiers": ["full"],
+      "domains": ["ux", "a11y"],
+      "invariants": ["INV-14"]
+    },
+    {
+      "id": "TC-AUTH-01",
+      "file": "tests/12-auth-and-cron.spec.mjs",
+      "layer": "L3",
+      "priority": "P0",
+      "tiers": ["core", "full"],
+      "domains": ["auth", "cron"],
+      "invariants": ["INV-08", "INV-12"]
+    },
+    {
+      "id": "TC-BOT-01",
+      "file": "tests/l2/bot-claw.test.mjs",
+      "layer": "L2",
+      "priority": "P1",
+      "tiers": ["smoke", "core", "full"],
+      "domains": ["bot-claw"],
+      "invariants": ["INV-08", "INV-09"]
+    },
+    {
+      "id": "TC-REM-01",
+      "file": "tests/l2/bot-reminders.test.mjs",
+      "layer": "L2",
+      "priority": "P1",
+      "tiers": ["smoke", "core", "full"],
+      "domains": ["reminders"],
+      "invariants": ["INV-08", "INV-09"]
+    },
+    {
+      "id": "TC-WEATH-01",
+      "file": "tests/l2/bot-weather.test.mjs",
+      "layer": "L2",
+      "priority": "P1",
+      "tiers": ["core", "full"],
+      "domains": ["weather"],
+      "invariants": ["INV-08", "INV-09"]
+    },
+    {
+      "id": "TC-AGENT-01",
+      "file": "tests/l2/agent-goals.test.mjs",
+      "layer": "L2",
+      "priority": "P1",
+      "tiers": ["core", "full"],
+      "domains": ["agent"],
+      "invariants": ["INV-09", "INV-10"]
+    }
+  ]
+}
+
