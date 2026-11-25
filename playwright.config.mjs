@@ -30,7 +30,7 @@ export default defineConfig({
     },
     fullyParallel: false,
     workers: 1, // Single isolated local Wrangler D1 + controllable Fake Externals
-    retries: 0, // Zero retries so flaky/race bugs surface immediately instead of being masked
+    retries: 0, // Zero retries so flaky/race bugs surface immediately
     reporter: [
         ['list'],
         ['html', { open: 'never', outputFolder: 'playwright-report' }],
@@ -42,7 +42,7 @@ export default defineConfig({
             ...(localChrome ? { executablePath: localChrome } : {}),
             args: ['--no-sandbox'],
         },
-        serviceWorkers: 'allow', // Critical: test real Service Worker offline & cache lifecycle
+        serviceWorkers: 'allow',
         trace: 'retain-on-failure',
         screenshot: 'only-on-failure',
         video: 'retain-on-failure',
@@ -52,23 +52,24 @@ export default defineConfig({
     projects: [
         {
             name: 'mobile-pwa',
+            testIgnore: /11-desktop-web\.spec\.mjs/,
             use: {
                 ...devices['iPhone 14'],
-                // Keep Chromium / local Chrome engine while enforcing mobile viewport & touch
                 browserName: 'chromium',
                 viewport: { width: 390, height: 844 },
                 hasTouch: true,
                 isMobile: true,
             },
         },
-        // Reserved for Phase 2 Desktop Web parity:
-        // {
-        //     name: 'desktop-web',
-        //     use: {
-        //         viewport: { width: 1280, height: 800 },
-        //         hasTouch: false,
-        //         isMobile: false,
-        //     },
-        // },
+        {
+            name: 'desktop-web',
+            testMatch: /11-desktop-web\.spec\.mjs/,
+            use: {
+                browserName: 'chromium',
+                viewport: { width: 1280, height: 800 },
+                hasTouch: false,
+                isMobile: false,
+            },
+        },
     ],
 });

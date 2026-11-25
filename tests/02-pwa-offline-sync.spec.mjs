@@ -13,6 +13,7 @@ test.describe('P1 PWA 离线生命线、增量补偿与双端同步冲突', () =
         const pageA = await deviceA.newPage();
 
         await harnessA.registerAndEnter(pageA, user);
+        await expect(pageA.locator('#sync-status')).toHaveAttribute('data-tone', 'ok', { timeout: 10_000 });
         const swInfo = await waitForServiceWorkerReady(pageA);
         expect(swInfo.cachedCount).toBeGreaterThan(25);
 
@@ -54,6 +55,7 @@ test.describe('P1 PWA 离线生命线、增量补偿与双端同步冲突', () =
             pageA.waitForResponse((r) => r.url().includes('/api/sync/batch') && r.status() === 200),
             pageA.evaluate(() => window.dispatchEvent(new Event('online'))),
         ]);
+        await expect(pageA.locator('#sync-status')).toHaveAttribute('data-tone', 'ok', { timeout: 10_000 });
 
         // 打开全新第二台设备（无任何本地 IndexedDB 缓存）登录同一账号，验证数据全部上云
         const deviceB = await browser.newContext();
@@ -84,26 +86,37 @@ test.describe('P1 PWA 离线生命线、增量补偿与双端同步冲突', () =
 
         // 设备 A 创建初始笔记并等待入库确认
         await harnessA.registerAndEnter(pageA, user);
+        await expect(pageA.locator('#sync-status')).toHaveAttribute('data-tone', 'ok', { timeout: 10_000 });
         await pageA.locator('.mobile-tab-item[data-view="notes"]').click();
         await pageA.locator('#btn-create-new').click();
         await pageA.locator('#edit-note-title').fill('双端冲突靶子笔记');
         await pageA.locator('#edit-note-content').fill('初始版本 v1');
         await Promise.all([
-            pageA.waitForResponse((r) => r.url().includes('/api/notes') && r.ok()),
+            pageA.waitForResponse((r) => (r.url().includes('/api/sync/batch') || r.url().includes('/api/notes')) && r.ok()),
             pageA.locator('#btn-save-note').click(),
         ]);
+        await expect(pageA.locator('#view-notes')).toHaveClass(/active/, { timeout: 10_000 });
         await expect(pageA.locator('#notes-list-container .note-item', { hasText: '双端冲突靶子笔记' })).toBeVisible();
+        const notesOnA = await (await pageA.request.get(`${harnessA.runtime.appOrigin}/api/notes`)).json();
+        expect(notesOnA.some((n) => n.title === '双端冲突靶子笔记'), `A D1 notes: ${JSON.stringify(notesOnA.map(n => n.title))}`).toBe(true);
 
-        // 设备 B 登录并拉取同一版本 v1
-        await harnessB.loginAndEnter(pageB, user);
+        // 设备 B 登录并等待云端拉取完成，验证同一版本 v1
+        await Promise.all([
+            pageB.waitForResponse((r) => r.url().includes('/api/sync/pull') && r.ok()),
+            harnessB.loginAndEnter(pageB, user),
+        ]);
+        await expect(pageB.locator('#sync-status')).toHaveAttribute('data-tone', 'ok', { timeout: 10_000 });
+        const notesOnB = await (await pageB.request.get(`${harnessB.runtime.appOrigin}/api/notes`)).json();
+        expect(notesOnB.some((n) => n.title === '双端冲突靶子笔记'), `B D1 notes: ${JSON.stringify(notesOnB.map(n => n.title))}`).toBe(true);
         await pageB.locator('.mobile-tab-item[data-view="notes"]').click();
         await expect(pageB.locator('#notes-list-container .note-item', { hasText: '双端冲突靶子笔记' })).toBeVisible({ timeout: 15_000 });
 
         // 设备 A 先在线修改为 v2 并等待云端落库响应
         await pageA.locator('#notes-list-container .note-item', { hasText: '双端冲突靶子笔记' }).click();
+        await expect(pageA.locator('#view-note-editor')).toHaveClass(/active/);
         await pageA.locator('#edit-note-content').fill('设备 A 修改后的内容 v2');
         await Promise.all([
-            pageA.waitForResponse((r) => r.url().includes('/api/notes') && r.ok()),
+            pageA.waitForResponse((r) => (r.url().includes('/api/sync/batch') || r.url().includes('/api/notes')) && r.ok()),
             pageA.locator('#btn-save-note').click(),
         ]);
 
@@ -111,6 +124,7 @@ test.describe('P1 PWA 离线生命线、增量补偿与双端同步冲突', () =
         harnessB.setAllowConsoleErrors(true);
         await ctxB.setOffline(true);
         await pageB.locator('#notes-list-container .note-item', { hasText: '双端冲突靶子笔记' }).click();
+        await expect(pageB.locator('#view-note-editor')).toHaveClass(/active/);
         await pageB.locator('#edit-note-content').fill('设备 B 离线修改的内容 v3');
         await pageB.locator('#btn-save-note').click();
 
@@ -128,8 +142,26 @@ test.describe('P1 PWA 离线生命线、增量补偿与双端同步冲突', () =
         await expect(pageB.locator('#sync-conflict-list')).toContainText('双端冲突靶子笔记');
 
         // 裁决保留本地版本或云端版本后冲突条消失
-        await pageB.locator('#sync-conflict-list button', { hasText: /保留本地|保留云端/ }).first().click();
+        await Promise.all([
+            pageB.waitForResponse((r) => r.url().includes('/api/sync/batch') && r.ok()),
+            pageB.locator('#sync-conflict-list button', { hasText: /保留本地/ }).first().click(),
+        ]);
         await expect(pageB.locator('#sync-conflict-banner')).toBeHidden({ timeout: 10_000 });
+
+        // 断言最终数据已在 UI、后端 D1 与设备 A 之间收敛一致
+        const notesResB = await pageB.request.get(`${harnessB.runtime.appOrigin}/api/notes`);
+        expect(notesResB.ok()).toBe(true);
+        const notesB = await notesResB.json();
+        const resolvedNote = notesB.find((n) => n.title === '双端冲突靶子笔记');
+        expect(resolvedNote?.content).toBe('设备 B 离线修改的内容 v3');
+
+        await Promise.all([
+            pageA.waitForResponse((r) => r.url().includes('/api/sync/pull') && r.ok()),
+            pageA.reload({ waitUntil: 'load' }),
+        ]);
+        await pageA.locator('.mobile-tab-item[data-view="notes"]').click();
+        await pageA.locator('#notes-list-container .note-item', { hasText: '双端冲突靶子笔记' }).click();
+        await expect(pageA.locator('#edit-note-content')).toHaveValue('设备 B 离线修改的内容 v3');
 
         harnessA.assertNoBugs('冲突测试设备 A');
         harnessB.assertNoBugs('冲突测试设备 B');

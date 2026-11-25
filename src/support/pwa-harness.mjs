@@ -8,11 +8,32 @@ const require = createRequire(import.meta.url);
 const axePath = require.resolve('axe-core/axe.min.js');
 const AXE_SOURCE = fs.readFileSync(axePath, 'utf8');
 
+export const MONITORING_TAXONOMY = {
+    checked: [
+        'Uncaught JS exceptions (pageerror)',
+        'Trusted Types & CSP violations',
+        'HTTP 5xx responses on /api/*',
+        'HTTP 4xx/5xx on static assets',
+        'Post-authentication 401 session-race responses',
+        'Console.error messages (strictConsole mode)',
+    ],
+    allowed: [
+        'Pre-login /api/auth/me 401 probe on initial load',
+        'Intentional ERR_INTERNET_DISCONNECTED / ERR_FAILED when ctx.setOffline(true)',
+        'Intentional /api/ai/chat 5xx when fake-externals fault injection is enabled',
+        'favicon.ico 404 if absent',
+    ],
+    unchecked: [
+        'Real WeChat ClawBot client QR scan & physical delivery (covered via Fake iLink protocol simulation only)',
+        'Real APNs / FCM Web Push delivery on physical phones',
+        'Physical Android/iOS soft-keyboard geometry & OS-level PWA install prompts',
+        'Cloudflare production edge cold-start & global D1 replication lag',
+    ],
+};
+
 /**
- * Attaches production firewall, virtual per-context IP isolation, and zero-tolerance
- * runtime monitors (pageerror, console.error, post-auth 401s, 5xx, static 4xx) to a BrowserContext.
- * Exposes registerAndEnter / loginAndEnter directly on the returned harness so authenticated
- * monitoring is always enabled automatically.
+ * Attaches production firewall, virtual per-context IP isolation, and categorized
+ * runtime monitors (checked / allowed / unchecked) to a BrowserContext.
  */
 export async function attachPwaHarness(context, options = {}) {
     const runtime = readRuntime();
@@ -27,6 +48,7 @@ export async function attachPwaHarness(context, options = {}) {
         postAuth401s: [],
         api5xx: [],
         staticErrors: [],
+        allowedEvents: [],
         allowServerErrors: Boolean(options.allowServerErrors),
         allowConsoleErrors: Boolean(options.allowConsoleErrors),
     };
@@ -43,8 +65,14 @@ export async function attachPwaHarness(context, options = {}) {
         page.on('console', (msg) => {
             if (msg.type() === 'error') {
                 const text = msg.text();
-                if (state.allowConsoleErrors) return;
-                if (text.includes('net::ERR_INTERNET_DISCONNECTED') || text.includes('Failed to load resource: net::ERR_FAILED')) return;
+                if (state.allowConsoleErrors) {
+                    state.allowedEvents.push(`[allowed console.error] ${text.slice(0, 120)}`);
+                    return;
+                }
+                if (text.includes('net::ERR_INTERNET_DISCONNECTED') || text.includes('Failed to load resource: net::ERR_FAILED')) {
+                    state.allowedEvents.push(`[allowed offline console] ${text.slice(0, 120)}`);
+                    return;
+                }
                 state.consoleErrors.push(`[console.error] ${text}`);
             }
         });
@@ -53,11 +81,19 @@ export async function attachPwaHarness(context, options = {}) {
             if (!url.startsWith(runtime.appOrigin)) return;
             const pathname = new URL(url).pathname;
             if (pathname.startsWith('/api/')) {
-                if (res.status() === 401 && state.authenticated) {
-                    state.postAuth401s.push(`[401 after login] ${res.request().method()} ${pathname}`);
+                if (res.status() === 401) {
+                    if (state.authenticated) {
+                        state.postAuth401s.push(`[401 after login] ${res.request().method()} ${pathname}`);
+                    } else {
+                        state.allowedEvents.push(`[allowed pre-login 401] ${res.request().method()} ${pathname}`);
+                    }
                 }
-                if (res.status() >= 500 && !state.allowServerErrors) {
-                    state.api5xx.push(`[${res.status()}] ${res.request().method()} ${pathname}`);
+                if (res.status() >= 500) {
+                    if (state.allowServerErrors) {
+                        state.allowedEvents.push(`[allowed injected ${res.status()}] ${res.request().method()} ${pathname}`);
+                    } else {
+                        state.api5xx.push(`[${res.status()}] ${res.request().method()} ${pathname}`);
+                    }
                 }
             } else if (res.status() >= 400 && !pathname.includes('favicon')) {
                 state.staticErrors.push(`[${res.status()}] ${pathname}`);
@@ -81,6 +117,19 @@ export async function attachPwaHarness(context, options = {}) {
             state.api5xx.length = 0;
             state.staticErrors.length = 0;
         },
+        monitoringSummary() {
+            return {
+                checked: {
+                    pageErrors: state.pageErrors.length,
+                    api5xx: state.api5xx.length,
+                    staticErrors: state.staticErrors.length,
+                    postAuth401s: state.postAuth401s.length,
+                    consoleErrors: state.consoleErrors.length,
+                },
+                allowedCount: state.allowedEvents.length,
+                unchecked: MONITORING_TAXONOMY.unchecked,
+            };
+        },
         assertNoBugs(label = 'Page health', { strictConsole = false } = {}) {
             const problems = [
                 ...state.pageErrors,
@@ -91,9 +140,6 @@ export async function attachPwaHarness(context, options = {}) {
             ];
             expect(problems, `${label} detected unexpected runtime/network errors:\n${problems.join('\n')}`).toEqual([]);
         },
-        /**
-         * Registers a brand-new user via UI and automatically enables post-auth monitoring.
-         */
         async registerAndEnter(page, user) {
             await page.goto(runtime.appOrigin + '/', { waitUntil: 'load' });
             await expect(page.locator('#auth-overlay')).toBeVisible();
@@ -109,9 +155,6 @@ export async function attachPwaHarness(context, options = {}) {
             await expect(page.locator('#nav-username')).toContainText(user.username, { timeout: 10_000 });
             state.authenticated = true;
         },
-        /**
-         * Logs into an existing user via UI and automatically enables post-auth monitoring.
-         */
         async loginAndEnter(page, user) {
             await page.goto(runtime.appOrigin + '/', { waitUntil: 'load' });
             await expect(page.locator('#auth-overlay')).not.toHaveClass(/hidden/);
@@ -131,9 +174,6 @@ export async function attachPwaHarness(context, options = {}) {
     return harness;
 }
 
-/**
- * Ensures the Service Worker is activated and controlling the current page.
- */
 export async function waitForServiceWorkerReady(page) {
     const controlled = await page.evaluate(async () => {
         if (!('serviceWorker' in navigator)) return { supported: false };
@@ -169,9 +209,6 @@ export async function waitForServiceWorkerReady(page) {
     return controlled;
 }
 
-/**
- * Verifies Mobile PWA viewport has zero unintended horizontal overflow.
- */
 export async function assertNoMobileOverflow(page, label) {
     const metrics = await page.evaluate(() => ({
         scrollWidth: document.documentElement.scrollWidth,
@@ -188,10 +225,6 @@ export async function injectAxeInitScript(context) {
     await context.addInitScript(AXE_SOURCE);
 }
 
-/**
- * Runs WCAG 2.1 AA accessibility & color-contrast scan via axe-core.
- * Expects injectAxeInitScript(context) to have pre-loaded window.axe safely under Trusted Types.
- */
 export async function runAxeScan(page, label) {
     const hasAxe = await page.evaluate(() => typeof window.axe !== 'undefined');
     if (!hasAxe) {
@@ -212,9 +245,6 @@ export async function runAxeScan(page, label) {
     return { label, violations };
 }
 
-/**
- * Controls the local Fake Externals server (e.g. inject 500, slow response, or restore ok).
- */
 export async function setExternalFaultMode(patch) {
     const { fakeExtOrigin } = readRuntime();
     const res = await fetch(`${fakeExtOrigin}/__control`, {
@@ -223,5 +253,12 @@ export async function setExternalFaultMode(patch) {
         body: JSON.stringify(patch),
     });
     if (!res.ok) throw new Error(`Failed to set fake externals mode: ${res.status}`);
+    return res.json();
+}
+
+export async function getExternalControlState() {
+    const { fakeExtOrigin } = readRuntime();
+    const res = await fetch(`${fakeExtOrigin}/__control`);
+    if (!res.ok) throw new Error(`Failed to read fake externals state: ${res.status}`);
     return res.json();
 }

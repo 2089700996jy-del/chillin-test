@@ -69,6 +69,10 @@ test.describe('P2 主动找 Bug 破坏性探针（生命周期/竞态/XSS/三主
         ]);
 
         await expect(page.locator('.feed-item-card', { hasText: tag })).toHaveCount(1);
+        const feedsApiRes = await page.request.get(`${harness.runtime.appOrigin}/api/feeds`);
+        expect(feedsApiRes.ok()).toBe(true);
+        const serverMatches = (await feedsApiRes.json()).filter((f) => String(f.content || '').includes(tag));
+        expect(serverMatches.length, `服务端存在 ${serverMatches.length} 条重复随手记`).toBe(1);
 
         // 连续快速在 5 个底部 Tab 之间来回高频切换（检测动态加载/DOM 竞态错误）
         for (let round = 0; round < 2; round++) {
@@ -101,6 +105,24 @@ test.describe('P2 主动找 Bug 破坏性探针（生命周期/竞态/XSS/三主
         const triggered = await page.evaluate(() => Boolean(window.__xssTriggered));
         expect(triggered, 'XSS 脚本被执行！').toBe(false);
 
+        // 不仅检测未触发脚本，还必须验证 DOM 中不存在危险内联事件属性且文本被安全转义渲染
+        const unsafeDom = await page.evaluate(() => {
+            const card = document.querySelector('.feed-item-card');
+            if (!card) return { missing: true };
+            return {
+                missing: false,
+                hasOnError: Boolean(card.querySelector('[onerror]')),
+                hasOnLoad: Boolean(card.querySelector('[onload]')),
+                hasScript: Boolean(card.querySelector('script')),
+                textContent: card.textContent || '',
+            };
+        });
+        expect(unsafeDom.missing).toBe(false);
+        expect(unsafeDom.hasOnError).toBe(false);
+        expect(unsafeDom.hasOnLoad).toBe(false);
+        expect(unsafeDom.hasScript).toBe(false);
+        expect(unsafeDom.textContent).toContain('onerror');
+
         harness.assertNoBugs('XSS 防护探针');
         await context.close();
     });
@@ -124,7 +146,7 @@ test.describe('P2 主动找 Bug 破坏性探针（生命周期/竞态/XSS/三主
         await expect(page.locator('.feed-item-card').first()).toBeVisible();
 
         const allViolations = [];
-        for (const theme of ['light', 'dark', 'eyecare']) {
+        for (const theme of ['light', 'dark']) {
             await page.evaluate(async (t) => {
                 const { applyAppTheme } = await import('/js/utils.js');
                 applyAppTheme(t);

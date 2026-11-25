@@ -19,11 +19,13 @@ const MIME_TYPES = {
 
 /**
  * Local same-origin static server + /api/* reverse proxy to local wrangler dev.
- * Replays Chillin's CSP & Trusted Types headers (adapted for http://127.0.0.1) so
- * real browser runs catch any CSP or Trusted Types violations immediately.
+ * Replays Chillin's public/_headers security policies (CSP, Trusted Types,
+ * Referrer-Policy, Permissions-Policy, X-Frame-Options, COOP, X-Content-Type-Options).
+ * Note: HSTS and upgrade-insecure-requests are intentionally omitted on http://127.0.0.1.
  */
 export function createAppProxyServer({ publicDir, wranglerOrigin }) {
-    // Same CSP hash allowlist & Trusted Types enforcement as public/_headers, minus upgrade-insecure-requests
+    const realPublicDir = fs.realpathSync(publicDir);
+
     const LOCAL_CSP = [
         "default-src 'self'",
         "base-uri 'self'",
@@ -40,6 +42,15 @@ export function createAppProxyServer({ publicDir, wranglerOrigin }) {
         "require-trusted-types-for 'script'",
         "trusted-types chillin#html dompurify"
     ].join('; ');
+
+    const COMMON_SECURITY_HEADERS = {
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Referrer-Policy': 'strict-origin-when-cross-origin',
+        'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Content-Security-Policy': LOCAL_CSP,
+    };
 
     const server = http.createServer(async (req, res) => {
         try {
@@ -83,7 +94,7 @@ export function createAppProxyServer({ publicDir, wranglerOrigin }) {
                 upstream.headers.forEach((v, k) => {
                     const lk = k.toLowerCase();
                     if (lk === 'transfer-encoding' || lk === 'content-encoding' || lk === 'content-length') return;
-                    if (lk === 'set-cookie') return; // handled via getSetCookie
+                    if (lk === 'set-cookie') return;
                     outHeaders[k] = v;
                 });
                 const cookies = typeof upstream.headers.getSetCookie === 'function'
@@ -104,16 +115,28 @@ export function createAppProxyServer({ publicDir, wranglerOrigin }) {
                 return;
             }
 
-            // Static file resolution under D:\7\chillin\public
-            let reqPath = decodeURIComponent(url.pathname);
+            // Static file resolution with strict path traversal & symlink boundary checks
+            let reqPath;
+            try {
+                reqPath = decodeURIComponent(url.pathname);
+            } catch {
+                res.writeHead(400);
+                res.end('Bad Request');
+                return;
+            }
+            if (reqPath.includes('\0') || reqPath.includes('\\')) {
+                res.writeHead(403);
+                res.end('Forbidden');
+                return;
+            }
             if (reqPath === '/') reqPath = '/index.html';
 
             // Serve local same-origin config.js override at HTTP boundary (never mutating chillin repo on disk)
             if (reqPath === '/js/config.js') {
                 res.writeHead(200, {
+                    ...COMMON_SECURITY_HEADERS,
                     'Content-Type': 'text/javascript; charset=utf-8',
                     'Cache-Control': 'no-cache, no-store, must-revalidate',
-                    'Content-Security-Policy': LOCAL_CSP,
                 });
                 res.end(
                     "export const CLOUD_WORKER_BASE = '';\n"
@@ -122,34 +145,41 @@ export function createAppProxyServer({ publicDir, wranglerOrigin }) {
                 return;
             }
 
-            const resolved = path.resolve(publicDir, '.' + reqPath);
-            if (!resolved.startsWith(path.resolve(publicDir))) {
+            const relPath = reqPath.replace(/^\/+/, '');
+            const resolved = path.resolve(realPublicDir, relPath);
+            if (resolved !== realPublicDir && !resolved.startsWith(realPublicDir + path.sep)) {
                 res.writeHead(403);
                 res.end('Forbidden');
                 return;
             }
-            if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) {
+            if (!fs.existsSync(resolved)) {
+                res.writeHead(404);
+                res.end('Not found');
+                return;
+            }
+            const realTarget = fs.realpathSync(resolved);
+            if (realTarget !== realPublicDir && !realTarget.startsWith(realPublicDir + path.sep)) {
+                res.writeHead(403);
+                res.end('Forbidden');
+                return;
+            }
+            if (fs.statSync(realTarget).isDirectory()) {
                 res.writeHead(404);
                 res.end('Not found');
                 return;
             }
 
-            const ext = path.extname(resolved).toLowerCase();
+            const ext = path.extname(realTarget).toLowerCase();
             const contentType = MIME_TYPES[ext] || 'application/octet-stream';
             const headers = {
+                ...COMMON_SECURITY_HEADERS,
                 'Content-Type': contentType,
-                'X-Content-Type-Options': 'nosniff',
-                'X-Frame-Options': 'DENY',
-                'Cross-Origin-Opener-Policy': 'same-origin',
-                'Content-Security-Policy': LOCAL_CSP,
+                'Cache-Control': (reqPath === '/sw.js' || reqPath === '/index.html' || reqPath === '/version.json' || reqPath === '/js/version.js')
+                    ? 'no-cache, no-store, must-revalidate'
+                    : 'no-cache, must-revalidate',
             };
-            if (reqPath === '/sw.js' || reqPath === '/index.html' || reqPath === '/version.json' || reqPath === '/js/version.js') {
-                headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
-            } else {
-                headers['Cache-Control'] = 'no-cache, must-revalidate';
-            }
             res.writeHead(200, headers);
-            fs.createReadStream(resolved).pipe(res);
+            fs.createReadStream(realTarget).pipe(res);
         } catch (err) {
             console.error('[app-proxy] error:', err);
             if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'application/json' });
