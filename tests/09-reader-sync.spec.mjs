@@ -57,7 +57,7 @@ test.describe('Reader 云端书库、跨端进度、软删除墓碑、显式重�
         const progResA = await pageA.request.get(`${base}/api/reader/progress`);
         expect(progResA.ok()).toBe(true);
         const progListA = await progResA.json();
-        const matchedProg = progListA.find((p) => String(p.book_id) === String(bookKey) || String(p.bookId) === String(bookKey) || String(p.title || p.book_title || '').includes('云端同步小说'));
+        const matchedProg = progListA.find((p) => String(p.book_key || p.book_id || p.bookId || '') === String(bookKey) || String(p.title || p.book_title || '').includes('云端同步小说'));
         expect(matchedProg).toBeTruthy();
         const syncedChapter = Number(matchedProg.chapter_index ?? matchedProg.chapterIndex ?? matchedProg.chapter ?? 0);
         expect(syncedChapter).toBe(2); // 0-based index 2 = 第 3 章
@@ -70,20 +70,20 @@ test.describe('Reader 云端书库、跨端进度、软删除墓碑、显式重�
         await expect(pageA.locator('#view-reader-book')).toHaveClass(/active/, { timeout: 10_000 });
         await expect(pageA.locator('#chapter-indicator')).toContainText('3 / 5', { timeout: 10_000 });
 
-        // 旧数据与重复同步保护：发送更早时间戳的旧进度 (第 1 章)，不应覆盖已同步的第 3 章进度
+        // 旧数据与重复同步保护：发送更早 client_ts 的旧进度 (第 1 章)，不应覆盖已同步的第 3 章进度
         const staleRes = await pageB.request.post(`${base}/api/reader/progress`, {
             data: {
-                book_id: bookKey,
                 book_key: bookKey,
+                book_title: '云端同步小说',
                 chapter_index: 0,
-                scroll_offset: 0,
-                updated_at: '2020-01-01 00:00:00',
-                updatedAt: '2020-01-01T00:00:00.000Z',
+                chapter_title: '第1章',
+                scroll_percentage: 0,
+                client_ts: 1000,
             },
         });
         expect(staleRes.status()).toBeLessThan(500);
         const progAfterStale = await (await pageA.request.get(`${base}/api/reader/progress`)).json();
-        const latestRow = progAfterStale.find((p) => String(p.book_id) === String(bookKey) || String(p.bookId) === String(bookKey));
+        const latestRow = progAfterStale.find((p) => String(p.book_key || p.book_id || p.bookId || '') === String(bookKey));
         expect(Number(latestRow?.chapter_index ?? latestRow?.chapterIndex ?? latestRow?.chapter ?? -1)).toBe(2);
 
         // 3. 软删除与墓碑同步：设备 A 删除书籍 -> 校验常规列表消失且 include_deleted=1 暴露墓碑
