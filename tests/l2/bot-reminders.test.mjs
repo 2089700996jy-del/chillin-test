@@ -72,12 +72,14 @@ test('L2 Reminders 协议仿真：创建、到时触发、追问、完成、取�
         let t = now + 120_200;
         await runReminderChecks(env, db, fakeIlinkFetch, { nowMs: t });
         for (let i = 0; i < 6; i++) {
-            t += 60 * 60 * 1000;
+            t += 11 * 60 * 1000;
             await runReminderChecks(env, db, fakeIlinkFetch, { nowMs: t });
         }
-        const rowExhausted = await db.prepare('SELECT status, follow_up_status FROM bot_reminders WHERE id = ?1').bind(rFail.id).first();
-        const finalState = rowExhausted.follow_up_status === 'failed' ? 'failed' : rowExhausted.status;
-        assert.ok(['failed', 'missed', 'done'].includes(finalState));
+        const rowExhausted = await db.prepare('SELECT status, follow_up_status, follow_up_attempts FROM bot_reminders WHERE id = ?1').bind(rFail.id).first();
+        assert.equal(rowExhausted.status, 'missed', '达到最大重试次数后提醒主状态应严格进入 missed');
+        assert.equal(rowExhausted.follow_up_status, 'failed', '达到最大重试上限时 follow_up_status 应严格进入 failed');
+        assert.equal(rowExhausted.follow_up_attempts, 5, '重试次数应严格耗尽至 5 次');
+        assert.equal((await fakeExt.getControlState()).ilinkSentMessages.length, 0, '注入 500 时不得有成功投递记录');
     } finally {
         db.close();
         await fakeExt.close();

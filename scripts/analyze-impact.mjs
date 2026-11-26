@@ -12,6 +12,7 @@ import { execSync } from 'node:child_process';
 import { CHILLIN_ROOT, TEST_ROOT, TMP_DIR } from '../src/env/ports.mjs';
 
 const TIER_RANK = { smoke: 1, core: 2, full: 3 };
+const ZERO_SHA = /^0+$/;
 
 function parseArgs(argv) {
     const out = { base: 'HEAD~1', head: 'HEAD', files: null, json: false };
@@ -25,15 +26,69 @@ function parseArgs(argv) {
     return out;
 }
 
-function getChangedFiles(base, head) {
-    const raw = execSync(`git -c core.quotePath=false diff --name-only ${base}..${head}`, { cwd: CHILLIN_ROOT, encoding: 'utf8' });
-    return raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+function commitExists(ref) {
+    if (!ref || ZERO_SHA.test(ref)) return false;
+    try {
+        execSync(`git cat-file -e "${ref}^{commit}"`, { cwd: CHILLIN_ROOT, stdio: 'ignore' });
+        return true;
+    } catch {
+        return false;
+    }
 }
 
-function detectApiRouteChanges(base, head, changedFiles) {
-    if (!changedFiles.includes('workers/api.js')) return [];
+function resolveDiffInputs(baseArg, headArg) {
+    const head = commitExists(headArg) ? headArg : 'HEAD';
+    if (commitExists(baseArg)) {
+        return { mode: 'range', base: baseArg, head, baselineResolved: true };
+    }
+    const parentRef = `${head}~1`;
+    if (commitExists(parentRef)) {
+        return { mode: 'range', base: parentRef, head, baselineResolved: true, note: `fallback from unavailable base (${baseArg || 'empty'}) to ${parentRef}` };
+    }
+    // Initial commit (no parent): inspect tree of head
+    return { mode: 'initial', base: null, head, baselineResolved: false, note: 'initial commit or missing git history; expanding to full' };
+}
+
+function getChangedFiles(diffInfo) {
+    if (diffInfo.mode === 'initial') {
+        const raw = execSync(`git -c core.quotePath=false diff-tree --no-commit-id --name-status -r ${diffInfo.head}`, {
+            cwd: CHILLIN_ROOT,
+            encoding: 'utf8',
+        });
+        return parseNameStatus(raw);
+    }
+    const raw = execSync(`git -c core.quotePath=false diff --name-status ${diffInfo.base}..${diffInfo.head}`, {
+        cwd: CHILLIN_ROOT,
+        encoding: 'utf8',
+    });
+    return parseNameStatus(raw);
+}
+
+function parseNameStatus(raw) {
+    const entries = [];
+    for (const line of raw.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const parts = trimmed.split(/\t+/);
+        const status = parts[0] || 'M';
+        // For renames (R100 old new), include both paths so deletion/addition rules both fire
+        if (status.startsWith('R') && parts.length >= 3) {
+            entries.push({ status: 'D', file: parts[1] });
+            entries.push({ status: 'A', file: parts[2] });
+        } else {
+            entries.push({ status: status[0], file: parts[1] });
+        }
+    }
+    return entries;
+}
+
+function detectApiRouteChanges(diffInfo, changedFiles) {
+    if (!changedFiles.includes('workers/api.js') || diffInfo.mode !== 'range') return [];
     try {
-        const diff = execSync(`git diff -U0 ${base}..${head} -- workers/api.js`, { cwd: CHILLIN_ROOT, encoding: 'utf8' });
+        const diff = execSync(`git diff -U0 ${diffInfo.base}..${diffInfo.head} -- workers/api.js`, {
+            cwd: CHILLIN_ROOT,
+            encoding: 'utf8',
+        });
         const routes = new Set();
         for (const line of diff.split(/\r?\n/)) {
             if (!line.startsWith('+') || line.startsWith('+++')) continue;
@@ -47,21 +102,49 @@ function detectApiRouteChanges(base, head, changedFiles) {
     }
 }
 
+function writeGithubOutputs(report) {
+    const outPath = process.env.GITHUB_OUTPUT;
+    if (!outPath) return;
+    const lines = [
+        `tier=${report.recommendedTier}`,
+        `recommended_command=${report.recommendedCommand}`,
+        `chillin_sha=${report.chillinSha}`,
+        `baseline_resolved=${report.baselineResolved}`,
+        `affected_suites=${report.affectedSuites.join(',')}`,
+        `has_gaps=${Boolean(report.gaps.unmappedProductionFiles.length || report.gaps.newMigrations.length || report.gaps.newOrModifiedApiRoutes.length)}`,
+    ];
+    fs.appendFileSync(outPath, `${lines.join('\n')}\n`, 'utf8');
+}
+
 function main() {
     const args = parseArgs(process.argv.slice(2));
     const impactMap = JSON.parse(fs.readFileSync(path.join(TEST_ROOT, 'registry/impact-map.json'), 'utf8'));
     const catalog = JSON.parse(fs.readFileSync(path.join(TEST_ROOT, 'registry/test-catalog.json'), 'utf8'));
 
-    const changedFiles = args.files || getChangedFiles(args.base, args.head);
+    let diffInfo = { mode: 'manual', base: null, head: 'HEAD', baselineResolved: true };
+    let entries;
+    if (args.files) {
+        entries = args.files.map((file) => ({ status: 'M', file }));
+    } else {
+        diffInfo = resolveDiffInputs(args.base, args.head);
+        entries = getChangedFiles(diffInfo);
+    }
+
+    const changedFiles = entries.map((e) => e.file);
+    const deletedFiles = entries.filter((e) => e.status === 'D').map((e) => e.file);
+    const addedFiles = entries.filter((e) => e.status === 'A').map((e) => e.file);
+
     const affectedSuites = new Set();
     const matchedDomains = new Set();
     const unmappedFiles = [];
     const newMigrations = changedFiles.filter((f) => /^migrations\/.*\.sql$/.test(f));
-    const newApiRoutes = args.files ? [] : detectApiRouteChanges(args.base, args.head, changedFiles);
+    const newApiRoutes = args.files ? [] : detectApiRouteChanges(diffInfo, changedFiles);
 
-    let recommendedTier = changedFiles.length === 0 ? 'smoke' : 'smoke';
+    // If baseline could not be resolved (e.g. initial commit / force-push), escalate safely to full
+    let recommendedTier = !diffInfo.baselineResolved ? 'full' : 'smoke';
 
-    for (const file of changedFiles) {
+    for (const entry of entries) {
+        const file = entry.file;
         let matched = false;
         for (const rule of impactMap.rules) {
             if (new RegExp(rule.pattern).test(file)) {
@@ -73,7 +156,6 @@ function main() {
                 }
             }
         }
-        // Ignore docs/tests/scripts when reporting unmapped production files
         const isIgnorable = /^(docs\/|tests\/|scripts\/|\.github\/|\.agents\/|README\.md|CHANGELOG\.md|PROGRESS\.md|package.*\.json)/.test(file);
         if (!matched && !isIgnorable) {
             unmappedFiles.push(file);
@@ -82,6 +164,15 @@ function main() {
                 recommendedTier = fallbackTier;
             }
         }
+        // Deleting a production file is high risk: escalate at least to core
+        if (entry.status === 'D' && !isIgnorable && TIER_RANK.core > TIER_RANK[recommendedTier]) {
+            recommendedTier = 'core';
+        }
+    }
+
+    // Adding new API routes or migrations always requires at least full/core verification
+    if (newMigrations.length > 0 || newApiRoutes.length > 0) {
+        recommendedTier = 'full';
     }
 
     const headSha = (() => {
@@ -95,13 +186,17 @@ function main() {
     const report = {
         analyzedAt: new Date().toISOString(),
         chillinSha: headSha,
-        range: args.files ? 'manual-files' : `${args.base}..${args.head}`,
+        baselineResolved: diffInfo.baselineResolved,
+        baselineNote: diffInfo.note || null,
+        range: args.files ? 'manual-files' : (diffInfo.mode === 'initial' ? `initial:${diffInfo.head}` : `${diffInfo.base}..${diffInfo.head}`),
         changedFilesCount: changedFiles.length,
         changedFiles,
+        addedFiles,
+        deletedFiles,
         matchedDomains: Array.from(matchedDomains),
         recommendedTier,
         recommendedCommand: recommendedTier === 'smoke'
-            ? 'npm run test:l2 && npm run test:smoke'
+            ? 'npm run test:smoke'
             : (recommendedTier === 'core' ? 'npm run test:l2 && npm run test:core' : 'npm run test:full'),
         affectedSuites: Array.from(affectedSuites),
         gaps: {
@@ -115,6 +210,7 @@ function main() {
 
     fs.mkdirSync(TMP_DIR, { recursive: true });
     fs.writeFileSync(path.join(TMP_DIR, 'impact-report.json'), JSON.stringify(report, null, 2), 'utf8');
+    writeGithubOutputs(report);
 
     if (args.json) {
         console.log(JSON.stringify(report, null, 2));
@@ -122,14 +218,15 @@ function main() {
     }
 
     console.log(`=== Chillin 变更影响分析 (${report.chillinSha} | ${report.range}) ===`);
-    console.log(`改动文件数: ${report.changedFilesCount} | 命中业务域: ${report.matchedDomains.join(', ') || '无'}`);
+    console.log(`改动文件数: ${report.changedFilesCount} (新增 ${addedFiles.length} / 删除 ${deletedFiles.length}) | 命中业务域: ${report.matchedDomains.join(', ') || '无'}`);
     console.log(`推荐执行分级: ${report.recommendedTier.toUpperCase()} -> ${report.recommendedCommand}`);
     if (report.affectedSuites.length) {
         console.log(`直接受影响测试 (${report.affectedSuites.length}):`);
         for (const s of report.affectedSuites) console.log(`  - ${s}`);
     }
-    if (unmappedFiles.length || newMigrations.length || newApiRoutes.length) {
+    if (unmappedFiles.length || newMigrations.length || newApiRoutes.length || !diffInfo.baselineResolved) {
         console.log(`\n[覆盖缺口与风险提示]`);
+        if (!diffInfo.baselineResolved) console.log(`  - 基线警告: ${diffInfo.note}`);
         if (unmappedFiles.length) console.log(`  - 未映射生产文件 (${unmappedFiles.length}): ${unmappedFiles.join(', ')}`);
         if (newMigrations.length) console.log(`  - 涉及迁移变更: ${newMigrations.join(', ')}`);
         if (newApiRoutes.length) console.log(`  - 涉及新增/修改 API 路由: ${newApiRoutes.join(', ')}`);

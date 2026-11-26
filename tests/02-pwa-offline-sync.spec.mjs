@@ -168,4 +168,71 @@ test.describe('P1 PWA 离线生命线、增量补偿与双端同步冲突 @core'
         await ctxA.close();
         await ctxB.close();
     });
+
+    test('周记新增、修改、刷新与跨设备重登后状态一致', async ({ browser }) => {
+        const user = uniqueUser('weekly');
+        const ctxA = await browser.newContext();
+        const ctxB = await browser.newContext();
+        const harnessA = await attachPwaHarness(ctxA);
+        const harnessB = await attachPwaHarness(ctxB);
+        const pageA = await ctxA.newPage();
+        const pageB = await ctxB.newPage();
+
+        await harnessA.registerAndEnter(pageA, user);
+        await expect(pageA.locator('#sync-status')).toHaveAttribute('data-tone', 'ok', { timeout: 10_000 });
+
+        // 1. 设备 A 新增周记并等待落库
+        await pageA.locator('.mobile-tab-item[data-view="home"]').click();
+        await pageA.locator('#btn-create-new').click();
+        await expect(pageA.locator('#view-editor')).toHaveClass(/active/);
+        await pageA.locator('#edit-title').fill('2026-W48 跨端同步周记');
+        await pageA.locator('#edit-summary').fill('初始摘要 v1');
+        await pageA.locator('#edit-content').fill('第一版周记正文内容');
+        await Promise.all([
+            pageA.waitForResponse((r) => (r.url().includes('/api/sync/batch') || r.url().includes('/api/weeklies')) && r.ok()),
+            pageA.locator('#btn-save-edit').click(),
+        ]);
+        await expect(pageA.locator('#view-home')).toHaveClass(/active/, { timeout: 10_000 });
+
+        // 2. 设备 A 修改该周记并刷新验证持久化
+        const cardA = pageA.locator('#gallery-container').getByText('2026-W48 跨端同步周记').first();
+        await expect(cardA).toBeVisible({ timeout: 10_000 });
+        await cardA.click();
+        await expect(pageA.locator('#view-article')).toHaveClass(/active/, { timeout: 10_000 });
+        await pageA.locator('#btn-edit-article').evaluate((el) => el.scrollIntoView({ block: 'center' }));
+        await pageA.locator('#btn-edit-article').click();
+        await expect(pageA.locator('#view-editor')).toHaveClass(/active/);
+        await pageA.locator('#edit-summary').fill('修订后摘要 v2');
+        await pageA.locator('#edit-content').fill('修订后的周记正文内容 v2');
+        await Promise.all([
+            pageA.waitForResponse((r) => (r.url().includes('/api/sync/batch') || r.url().includes('/api/weeklies')) && r.ok()),
+            pageA.locator('#btn-save-edit').click(),
+        ]);
+        await pageA.reload({ waitUntil: 'load' });
+        await expect(pageA.locator('#gallery-container')).toContainText('2026-W48 跨端同步周记', { timeout: 10_000 });
+        await expect(pageA.locator('#gallery-container')).toContainText('修订后摘要 v2');
+
+        // 3. 设备 B 首次登录拉取并验证看到修订后周记，退出重登后仍一致
+        await Promise.all([
+            pageB.waitForResponse((r) => r.url().includes('/api/sync/pull') && r.ok()),
+            harnessB.loginAndEnter(pageB, user),
+        ]);
+        await expect(pageB.locator('#sync-status')).toHaveAttribute('data-tone', 'ok', { timeout: 10_000 });
+        await expect(pageB.locator('#gallery-container')).toContainText('2026-W48 跨端同步周记', { timeout: 10_000 });
+        await expect(pageB.locator('#gallery-container')).toContainText('修订后摘要 v2');
+
+        await pageB.locator('#btn-logout').click();
+        await expect(pageB.locator('#auth-overlay')).not.toHaveClass(/hidden/, { timeout: 10_000 });
+        await Promise.all([
+            pageB.waitForResponse((r) => r.url().includes('/api/sync/pull') && r.ok()),
+            harnessB.loginAndEnter(pageB, user),
+        ]);
+        await expect(pageB.locator('#gallery-container')).toContainText('2026-W48 跨端同步周记', { timeout: 10_000 });
+        await expect(pageB.locator('#gallery-container')).toContainText('修订后摘要 v2');
+
+        harnessA.assertNoBugs('周记同步设备 A');
+        harnessB.assertNoBugs('周记同步设备 B');
+        await ctxA.close();
+        await ctxB.close();
+    });
 });

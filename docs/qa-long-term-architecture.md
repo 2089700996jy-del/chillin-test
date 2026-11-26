@@ -1,21 +1,33 @@
 # Chillin 长期演进型自动化质量保障架构设计
 
-> **状态**: Phase 1 已启动 | **被测主仓**: `../chillin`（当前基线 `v2.5.281` / `6fe75b0`）  
+> **状态**: 自动化闭环与 L1-L4 分层已落地 | **被测主仓**: `../chillin`  
 > **核心原则**：测试的最终依据是用户真实需求与业务不变量，而非当前代码已实现什么。
 
 ## 1. 四层测试架构与执行分级
 
 | 层级 | 运行环境与工具 | 验证重点 | 成本与定位 |
 | :--- | :--- | :--- | :--- |
-| **L1 快速逻辑层** | 主仓 `npm test`（`node --test`）+ 轻量契约校验 | 路由表、D1 Schema 与迁移一致性、前端静态模块依赖、纯逻辑 | 秒级完成，不重复主仓单测 |
-| **L2 业务集成层** | `npm run test:l2`（`node --test tests/l2/*.test.mjs` + `openMigratedLocalD1()` + `l2-harness.mjs`） | ClawBot 收件箱并发/去重、Reminders 生命周期、Agent 状态机、Weather 幂等、备份恢复 | **无浏览器开销，并行运行**，专注后端多模块状态机与真实 D1 迁移 |
-| **L3 真实用户流程层** | Playwright (`mobile-pwa` 390×844 + `desktop-web` 1280×800) + `app-proxy` + `wrangler dev` | HttpOnly Cookie 会话、SW 离线冷启、IndexedDB 同步与冲突裁决、R2 媒体/书籍、SSE 流式 AI | 只放必须经过浏览器/SW/Cookie/DOM 的端到端链路 |
-| **L4 对抗与可靠性层** | Playwright + `fake-externals` 故障注入 + 混沌探针 + 定向 Mutation | 并发 401 竞态、防连击、上游 500/畸形 JSON 降级、XSS/Trusted Types、跨账号越权、三主题 WCAG | 按风险触发或夜间全量运行 |
+| **L1 快速逻辑层** | 主仓 `cd ../chillin && npm test`（`node --test`） | 路由表、D1 Schema 与迁移一致性、前端静态模块依赖、纯逻辑 | 秒级完成，在跨仓库 QA 工作流首步执行 |
+| **L2 业务集成层** | `npm run test:l2`（`node --test tests/l2/*.test.mjs` + `openMigratedLocalD1()` + `l2-harness.mjs`） | ClawBot 收件箱并发/去重、Reminders 生命周期与重试上限、Agent 状态机、Weather 静默 vs 失败观测 | **无浏览器开销，并行运行**，专注后端多模块状态机与真实 D1 迁移 |
+| **L3 真实用户流程层** | Playwright (`mobile-pwa` 390×844 + `desktop-web` 1280×800) + `app-proxy` + `wrangler dev` | HttpOnly Cookie 会话与撤销、SW 离线冷启、IndexedDB 同步（周记/笔记）与冲突裁决、R2 媒体/书籍与进度保护、SSE 流式 AI、`restore-drill.mjs` | 只放必须经过浏览器/SW/Cookie/DOM 或真实 Wrangler 的端到端链路 |
+| **L4 对抗与可靠性层** | Playwright + `fake-externals` 故障注入 + 混沌探针 | 并发 401 竞态、防连击、上游 500/畸形 JSON 降级、XSS/Trusted Types、跨账号越权、三主题 WCAG | 按风险触发或夜间全量运行 |
 
 ### 执行分级
-- **Smoke**：L1 + L2 核心 + L3 `01-golden-flows`（< 2 分钟）
-- **Core**：L2 全量 + L3 P0 核心链路（PWA/同步/安全隔离）
-- **Full**：L2 + L3 全量（Mobile + Desktop）+ L4 混沌/XSS/三主题 A11y/故障注入
+- **Smoke** (`npm run test:smoke`)：L3 `@smoke` (`01-golden-flows`)（< 1 分钟）
+- **Core** (`npm run test:core` + `npm run test:l2`)：L2 全量 + L3 `@smoke|@core`（`01`、`02`、`08`、`12`）
+- **Full** (`npm run test:full`)：L2 全量 + L3/L4 全量（Mobile + Desktop）
+
+### L2 本地 SQLite 适配器与 Cloudflare D1 生产环境差异声明
+L2 通过 `src/support/local-d1.mjs`（`node:sqlite` 内存库加载 `CHILLIN_ROOT/migrations/*.sql`）运行，**不等同于 Cloudflare D1 生产环境**，差异包括：
+1. **运行时与事务模型**：`node:sqlite` 为单机进程内同步 SQLite；生产 D1 运行在 Cloudflare 边缘节点，受网络 RTT、边缘冷启动、全局读复制延迟与 Worker `waitUntil` 异步生命周期约束。
+2. **参数绑定适配**：`local-d1.mjs` 对 `undefined -> null` 与 `boolean -> 1/0` 做了兼容转换，生产 D1 对未绑定或非法类型可能直接抛出绑定异常。
+3. **外部网络与 Cron**：L2 中的 QWeather / iLink / LLM 均为本地 HTTP Fake 仿真，且 Cron 由测试显式传入时间推进，不等同于 Cloudflare 真实定时调度器与真实微信/和风 TLS 链路。
+
+## 2. 跨仓库自动闭环与变更影响分析
+
+1. **触发链路**：`chillin/.github/workflows/ci.yml` 的 `quality-gate` 通过后，由 `notify-qa` 发送 `repository_dispatch` (`chillin-updated`)，携带 `sha`、`before`、`ref`。
+2. **精确检出**：`chillin-test/.github/workflows/qa-suite.yml` 使用 `fetch-depth: 0` 检出目标 `sha` 并校验 `git rev-parse HEAD == client_payload.sha`。
+3. **影响分析驱动范围**：`scripts/analyze-impact.mjs` 基于 `registry/impact-map.json` 分析 `before..sha`（自动处理全零 `before` SHA、首次提交、删除文件、新增迁移、API 路由变更及未映射生产文件，无法判断时安全升级为 `core`/`full`），通过 `$GITHUB_OUTPUT` 决定本次执行的分级 (`smoke` / `core` / `full`)。
 
 ## 2. 核心业务不变量（Invariants）
 

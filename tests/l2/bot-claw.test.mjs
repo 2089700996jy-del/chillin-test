@@ -116,13 +116,18 @@ test('L2 ClawBot 协议仿真：消息去重、连续消息处理、并发互斥
         const bgTasks = [];
         await pollClawAccounts(env, db, fakeIlinkFetch, { budgetMs: 300, defer: (p) => bgTasks.push(p) });
         await Promise.all(bgTasks);
-        const inboxRow = await db.prepare("SELECT status, attempts, dedup_key FROM bot_claw_inbox WHERE dedup_key LIKE '%msg-fail-reply-4%' ORDER BY id DESC LIMIT 1").first();
+        const inboxRow = await db.prepare("SELECT status, attempts, last_error, dedup_key FROM bot_claw_inbox WHERE dedup_key LIKE '%msg-fail-reply-4%' ORDER BY id DESC LIMIT 1").first();
         assert.ok(inboxRow, '入站消息应记录在 bot_claw_inbox');
-        assert.ok(['failed', 'pending', 'done'].includes(inboxRow.status));
+        assert.equal(inboxRow.status, 'pending', '首次回信 500 失败后应保持 pending 等待退避重试');
+        assert.equal(inboxRow.attempts, 1, '首次回信失败 attempts 应严格为 1');
+        assert.match(String(inboxRow.last_error || ''), /500/, 'last_error 应记录 500 失败原因');
+        const failSideEffects = (await db.prepare("SELECT id FROM quick_feeds WHERE user_id = 1 AND content LIKE '%回信失败容错测试%'").all()).results;
+        assert.equal(failSideEffects.length, 1, '业务副作用应只持久化 1 条');
 
-        // 恢复 Fake iLink 正常状态后再次 poll，验证账号不死锁且能继续处理新消息
+        // 恢复 Fake iLink 正常状态后再次 poll，验证账号不死锁且能继续处理新消息，且不产生重复副作用
         await fakeExt.setFaultMode({
             ilinkSendFail: false,
+            clearRequests: true,
             pushClawUpdates: [
                 {
                     message_id: 'msg-recover-5',
@@ -135,8 +140,10 @@ test('L2 ClawBot 协议仿真：消息去重、连续消息处理、并发互斥
             ],
         });
         await pollClawAccounts(env, db, fakeIlinkFetch, { budgetMs: 300 });
-        const recovered = await db.prepare("SELECT id FROM quick_feeds WHERE user_id = 1 AND content LIKE '%故障恢复后新消息%'").first();
-        assert.ok(recovered, '故障恢复后新消息应正常处理');
+        const recovered = (await db.prepare("SELECT id FROM quick_feeds WHERE user_id = 1 AND content LIKE '%故障恢复后新消息%'").all()).results;
+        assert.equal(recovered.length, 1, '故障恢复后新消息应严格入库 1 条');
+        const failSideEffectsAfter = (await db.prepare("SELECT id FROM quick_feeds WHERE user_id = 1 AND content LIKE '%回信失败容错测试%'").all()).results;
+        assert.equal(failSideEffectsAfter.length, 1, '恢复后不得重复写入失败消息的业务副作用');
     } finally {
         db.close();
         await fakeExt.close();

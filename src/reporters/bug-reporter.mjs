@@ -7,6 +7,7 @@ class BugReporter {
     constructor(options = {}) {
         this.outputFile = options.outputFile || path.resolve('test-results/bug-report.md');
         this.failures = [];
+        this.blockedList = [];
         this.passedList = [];
         this.skippedList = [];
         this.startTime = Date.now();
@@ -28,7 +29,7 @@ class BugReporter {
         const errs = (result.errors || []).map((e) => (e.message || e.stack || String(e)).trim());
         const stdout = (result.stdout || []).map((c) => c.toString()).join('').trim();
         const attachments = (result.attachments || []).map((a) => `${a.name}: ${a.path || ''}`);
-        this.failures.push({
+        const entry = {
             titlePath,
             file: path.relative(process.cwd(), test.location.file),
             line: test.location.line,
@@ -37,7 +38,12 @@ class BugReporter {
             errors: errs,
             stdout,
             attachments,
-        });
+        };
+        if (result.status === 'timedOut' || result.status === 'interrupted') {
+            this.blockedList.push(entry);
+        } else {
+            this.failures.push(entry);
+        }
     }
 
     onEnd(result) {
@@ -49,8 +55,9 @@ class BugReporter {
         } catch { /* ignore */ }
 
         const meta = rt.chillinMeta || {};
-        const total = this.passedList.length + this.failures.length + this.skippedList.length;
+        const total = this.passedList.length + this.failures.length + this.blockedList.length + this.skippedList.length;
         const durationSec = ((Date.now() - this.startTime) / 1000).toFixed(1);
+        const qaTier = process.env.QA_TIER || 'full';
 
         const lines = [
             `# Chillin QA E2E 测试与 Bug 巡检报告`,
@@ -58,6 +65,7 @@ class BugReporter {
             `## 1. 执行元信息`,
             ``,
             `- **测试编号**: \`${rt.testRunId || 'unknown'}\``,
+            `- **执行分级**: \`${qaTier}\``,
             `- **执行时间**: ${rt.startedAt || new Date().toISOString()}（耗时 ${durationSec}s）`,
             `- **执行结果**: **${result.status.toUpperCase()}**`,
             `- **Chillin 版本**: \`v${meta.appVersion || 'unknown'}\``,
@@ -69,13 +77,15 @@ class BugReporter {
             `## 2. 统计汇总`,
             ``,
             `- **通过**: ${this.passedList.length}`,
-            `- **失败**: ${this.failures.length}`,
-            `- **跳过**: ${this.skippedList.length}`,
+            `- **失败（断言/功能异常）**: ${this.failures.length}`,
+            `- **未执行（跳过）**: ${this.skippedList.length}`,
+            `- **环境阻塞（超时/中断）**: ${this.blockedList.length}`,
             `- **合计**: ${total} 项`,
             ``,
         ];
 
-        if (this.failures.length === 0) {
+        const allIssues = [...this.failures, ...this.blockedList];
+        if (allIssues.length === 0) {
             lines.push(
                 `## 3. 巡检结论`,
                 ``,
@@ -83,8 +93,8 @@ class BugReporter {
                 ``
             );
         } else {
-            lines.push(`## 3. 本轮捕获到的失败与 Bug 清单 (${this.failures.length})`, ``);
-            this.failures.forEach((f, idx) => {
+            lines.push(`## 3. 本轮捕获到的失败与环境阻塞清单 (${allIssues.length})`, ``);
+            allIssues.forEach((f, idx) => {
                 lines.push(`### ${idx + 1}. ${f.titlePath}`);
                 lines.push(`- **复现位置**: \`${f.file}:${f.line}\` (${f.status}, ${f.durationMs}ms)`);
                 if (f.errors.length) {

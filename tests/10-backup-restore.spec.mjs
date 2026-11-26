@@ -1,5 +1,8 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { test, expect } from '@playwright/test';
+import { CHILLIN_ROOT } from '../src/env/ports.mjs';
 import { attachPwaHarness } from '../src/support/pwa-harness.mjs';
 import { openMigratedLocalD1 } from '../src/support/local-d1.mjs';
 import { uniqueUser, samplePngBuffer, sampleTxtBookBuffer } from '../src/support/test-data.mjs';
@@ -119,5 +122,16 @@ test.describe('Backup & Restore 全量导出与干净库恢复完整性验证', 
 
         harness.assertNoBugs('Backup & Restore 完整校验');
         await context.close();
+    });
+
+    test('调用主仓真实 restore-drill 脚本在隔离临时目录完成清单哈希、恢复演练与篡改拦截', async () => {
+        const drillScript = path.join(CHILLIN_ROOT, 'scripts', 'restore-drill.mjs');
+        expect(fs.existsSync(drillScript), `缺少主仓恢复演练脚本: ${drillScript}`).toBe(true);
+        const output = execFileSync(process.execPath, [drillScript], {
+            cwd: CHILLIN_ROOT,
+            encoding: 'utf8',
+            timeout: 60_000,
+        });
+        expect(output).toMatch(/drill|校验|ok|通过|restore/i);
     });
 });

@@ -29,10 +29,10 @@
       "suites": ["tests/02-pwa-offline-sync.spec.mjs", "tests/09-reader-sync.spec.mjs", "tests/01-golden-flows.spec.mjs"]
     },
     {
-      "pattern": "^(workers/src/garden-resources\\.js|workers/src/garden-media\\.js|public/js/notes\\.js|public/js/feeds\\.js|public/js/upload\\.js|public/js/prompts\\.js|public/js/wikilinks\\.js)$",
+      "pattern": "^(workers/src/garden-resources\\.js|workers/src/garden-media\\.js|public/js/notes\\.js|public/js/feeds\\.js|public/js/upload\\.js|public/js/prompts\\.js|public/js/wikilinks\\.js|public/js/weeklies\\.js)$",
       "domain": "garden",
       "recommendedTier": "core",
-      "suites": ["tests/01-golden-flows.spec.mjs", "tests/08-rag-and-isolation.spec.mjs", "tests/05-audit-migrated.spec.mjs"]
+      "suites": ["tests/01-golden-flows.spec.mjs", "tests/02-pwa-offline-sync.spec.mjs", "tests/08-rag-and-isolation.spec.mjs", "tests/05-audit-migrated.spec.mjs"]
     },
     {
       "pattern": "^(workers/src/garden-books\\.js|public/js/reader\\.js)$",
@@ -53,7 +53,7 @@
       "suites": ["tests/l2/agent-goals.test.mjs", "tests/03-ai-and-goals.spec.mjs", "tests/08-rag-and-isolation.spec.mjs"]
     },
     {
-      "pattern": "^workers/src/bot-claw\\.js$",
+      "pattern": "^workers/src/bot-(claw|commands|media|image-flow)\\.js$",
       "domain": "bot-claw",
       "recommendedTier": "core",
       "suites": ["tests/l2/bot-claw.test.mjs", "tests/12-auth-and-cron.spec.mjs"]
@@ -83,7 +83,7 @@
       "suites": ["tests/10-backup-restore.spec.mjs"]
     },
     {
-      "pattern": "^(public/style\\.css|public/index\\.html|public/app\\.js|public/js/search\\.js|public/js/router\\.js)$",
+      "pattern": "^(public/style\\.css|public/index\\.html|public/app\\.js|public/js/search\\.js|public/js/router\\.js|public/js/version\\.js|public/version\\.json)$",
       "domain": "ux-a11y",
       "recommendedTier": "full",
       "suites": ["tests/04-chaos-bug-hunter.spec.mjs", "tests/11-desktop-web.spec.mjs", "tests/01-golden-flows.spec.mjs"]
