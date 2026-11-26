@@ -128,7 +128,7 @@ test.describe('P2 主动找 Bug 破坏性探针（生命周期/竞态/XSS/三主
     });
 
     test('探针 4：三档主题（日间/深色/护眼）全视图横向溢出与 WCAG 对比度审计', async ({ browser }) => {
-        const context = await browser.newContext();
+        const context = await browser.newContext({ reducedMotion: 'reduce' });
         const harness = await attachPwaHarness(context);
         await injectAxeInitScript(context);
         const page = await context.newPage();

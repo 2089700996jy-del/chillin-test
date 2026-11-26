@@ -48,13 +48,12 @@ test.describe('P1 PWA 离线生命线、增量补偿与双端同步冲突 @core'
         await pageA.locator('#btn-save-note').click();
         await expect(pageA.locator('#notes-list-container .note-item', { hasText: '离线创作的长笔记' })).toBeVisible();
 
-        // 恢复网络并等待真实批量同步推送请求完成
-        await deviceA.setOffline(false);
+        // 恢复网络并等待真实批量同步推送请求完成（必须在 setOffline(false) 前挂载监听，避免浏览器原生 online 抢跑）
         harnessA.setAllowConsoleErrors(false);
-        await Promise.all([
-            pageA.waitForResponse((r) => r.url().includes('/api/sync/batch') && r.status() === 200),
-            pageA.evaluate(() => window.dispatchEvent(new Event('online'))),
-        ]);
+        const batchSyncPromise = pageA.waitForResponse((r) => r.url().includes('/api/sync/batch') && r.status() === 200);
+        await deviceA.setOffline(false);
+        await pageA.evaluate(() => window.dispatchEvent(new Event('online')));
+        await batchSyncPromise;
         await expect(pageA.locator('#sync-status')).toHaveAttribute('data-tone', 'ok', { timeout: 10_000 });
 
         // 打开全新第二台设备（无任何本地 IndexedDB 缓存）登录同一账号，验证数据全部上云
@@ -128,13 +127,12 @@ test.describe('P1 PWA 离线生命线、增量补偿与双端同步冲突 @core'
         await pageB.locator('#edit-note-content').fill('设备 B 离线修改的内容 v3');
         await pageB.locator('#btn-save-note').click();
 
-        // 设备 B 恢复联网，仅通过真实 online 事件触发黑盒自动同步，等待 /api/sync/pull 完成
-        await ctxB.setOffline(false);
+        // 设备 B 恢复联网，仅通过真实 online 事件触发黑盒自动同步，等待 /api/sync/pull 完成（先挂载监听防抢跑）
         harnessB.setAllowConsoleErrors(false);
-        await Promise.all([
-            pageB.waitForResponse((r) => r.url().includes('/api/sync/pull') && r.status() === 200),
-            pageB.evaluate(() => window.dispatchEvent(new Event('online'))),
-        ]);
+        const pullSyncPromise = pageB.waitForResponse((r) => r.url().includes('/api/sync/pull') && r.status() === 200);
+        await ctxB.setOffline(false);
+        await pageB.evaluate(() => window.dispatchEvent(new Event('online')));
+        await pullSyncPromise;
 
         await expect(pageB.locator('#sync-conflict-banner')).toBeVisible({ timeout: 15_000 });
         await pageB.locator('#sync-conflict-open').click();
