@@ -115,6 +115,26 @@ jobs:
             npm test
           fi
 
+      - name: Publish QA report to GitHub Step Summary
+        if: always()
+        run: |
+          if [ -f "chillin-test/test-results/bug-report.md" ]; then
+            node -e '
+              const fs = require("fs");
+              const raw = fs.readFileSync("chillin-test/test-results/bug-report.md", "utf8");
+              const limit = 512 * 1024;
+              const out = raw.length > limit
+                ? raw.slice(0, limit) + "\n\n> ⚠️ 报告已截断（超出 GitHub Step Summary 安全上限），完整内容请下载下方 Artifact。\n"
+                : raw;
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, out + "\n", "utf8");
+            '
+          else
+            {
+              echo "## Chillin QA Report"
+              echo "No bug-report.md generated (L1 or setup failed before Playwright run)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload QA report & artifacts
         if: always()
         uses: actions/upload-artifact@v4
