@@ -113,6 +113,9 @@ test.describe('RAG 多资源召回与跨账号权限隔离测试 @core', () => {
             ['DELETE', `/api/reader/books/${encodeURIComponent(bookKeyA)}`],
             ['GET', `/api/agent/goals/${goalA.id}`],
             ['DELETE', `/api/agent/goals/${goalA.id}`],
+            ['POST', `/api/agent/goals/${goalA.id}/run`],
+            ['POST', `/api/agent/goals/${goalA.id}/pause`],
+            ['POST', `/api/agent/goals/${goalA.id}/cancel`],
         ];
 
         for (const [method, endpoint, data] of forbiddenOps) {
@@ -125,6 +128,30 @@ test.describe('RAG 多资源召回与跨账号权限隔离测试 @core', () => {
                 `越权操作 ${method} ${endpoint} 未被拦截，返回 HTTP ${resp.status()}`
             ).toBe(true);
         }
+
+        // 账号 B 用相同 bookKey + force=1 上传，绝不能覆盖账号 A 的同名书籍正文
+        const sameKeyUploadB = await pageB.request.post(
+            `${base}/api/reader/books?key=${encodeURIComponent(bookKeyA)}&title=hijack&author=B&chapters=1&force=1`,
+            { headers: { 'Content-Type': 'text/plain; charset=utf-8' }, data: '越权书籍正文' }
+        );
+        expect(sameKeyUploadB.status()).toBeLessThan(500);
+        const bookAAfterUploadB = await pageA.request.get(`${base}/api/reader/books/${encodeURIComponent(bookKeyA)}`);
+        expect(bookAAfterUploadB.ok()).toBe(true);
+        expect(await bookAAfterUploadB.text()).toContain('第5章 A私密的章节 5');
+
+        // 账号 B 通过 /api/sync/batch 携带账号 A 的资源 ID 尝试批量劫持覆盖，绝不能修改账号 A 数据
+        const batchHijackRes = await pageB.request.post(`${base}/api/sync/batch`, {
+            data: {
+                notes: [{ id: noteA.id, title: '越权批量覆盖', content: 'hijack', date: '2026-11-26' }],
+                feeds: [{ id: feedA.id, content: '越权批量覆盖随手记' }],
+                weeklies: [{ id: weeklyA.id, title: '越权批量覆盖周记', summary: 'hijack', content: 'hijack', date: '2026-11-26' }],
+            },
+        });
+        expect(batchHijackRes.status()).toBeLessThan(500);
+        const notesAAfterHijack = await (await pageA.request.get(`${base}/api/notes`)).json();
+        const noteACheck = notesAAfterHijack.find((n) => String(n.id) === String(noteA.id));
+        expect(noteACheck?.title).toBe('A的私密笔记');
+        expect(noteACheck?.content).toContain('A_SECRET_NOTE');
 
         // 无 token 访问账号 A 的私有图片文件必须被拒绝或需要正确 token
         const bareFileUrl = uploadedA.src.split('?')[0];

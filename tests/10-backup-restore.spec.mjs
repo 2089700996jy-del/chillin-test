@@ -1,11 +1,32 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { test, expect } from '@playwright/test';
 import { CHILLIN_ROOT } from '../src/env/ports.mjs';
 import { attachPwaHarness } from '../src/support/pwa-harness.mjs';
 import { openMigratedLocalD1 } from '../src/support/local-d1.mjs';
 import { uniqueUser, samplePngBuffer, sampleTxtBookBuffer } from '../src/support/test-data.mjs';
+
+function readZipEntries(buf) {
+    const entries = [];
+    let offset = 0;
+    while (offset + 30 <= buf.length && buf.readUInt32LE(offset) === 0x04034b50) {
+        const flags = buf.readUInt16LE(offset + 6);
+        const method = buf.readUInt16LE(offset + 8);
+        const compSize = buf.readUInt32LE(offset + 18);
+        const nameLen = buf.readUInt16LE(offset + 26);
+        const extraLen = buf.readUInt16LE(offset + 28);
+        const name = buf.subarray(offset + 30, offset + 30 + nameLen).toString('utf8');
+        const dataStart = offset + 30 + nameLen + extraLen;
+        if (flags & 0x08) break; // data descriptor fallback not expected for buffered browser ZIP
+        const raw = buf.subarray(dataStart, dataStart + compSize);
+        const data = method === 8 ? zlib.inflateRawSync(raw) : raw;
+        entries.push({ name, data });
+        offset = dataStart + compSize;
+    }
+    return entries;
+}
 
 test.describe('Backup & Restore 全量导出与干净库恢复完整性验证', () => {
     test('生成全量备份 ZIP，并在干净测试库恢复后校验记录、图片元数据、R2 对象与阅读器正文完整', async ({ browser }) => {
@@ -57,6 +78,12 @@ test.describe('Backup & Restore 全量导出与干净库恢复完整性验证', 
         const zipBytes = fs.readFileSync(zipPath);
         expect(zipBytes.subarray(0, 2).toString('ascii')).toBe('PK'); // 合法 ZIP 魔数
         expect(zipBytes.length).toBeGreaterThan(200);
+        const zipEntries = readZipEntries(zipBytes);
+        expect(zipEntries.length, '下载的备份 ZIP 内未包含任何文件条目').toBeGreaterThan(0);
+        const zipCombinedText = zipEntries.map((e) => e.data.toString('utf8')).join('\n');
+        expect(zipCombinedText, '备份 ZIP 内容缺少创建的笔记/随手记/书籍数据').toContain('备份恢复校验笔记');
+        expect(zipCombinedText).toContain('备份恢复校验随手记');
+        expect(zipCombinedText).toContain('备份校验书籍');
 
         // 3. 获取服务端全量导出 JSON + 读取 R2 图片与书籍正文，恢复到全新干净 D1 + 仿真 R2 存储
         const exportRes = await page.request.get(`${base}/api/export`);

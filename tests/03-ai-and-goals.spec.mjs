@@ -55,7 +55,8 @@ test.describe('P1/P2 AI 记忆回响、Agent 目标闭环与外部异常降级�
         harness.setAllowConsoleErrors(true);
         await setExternalFaultMode({ mode: 'error500', delayMs: 0 });
 
-        await page.locator('#ai-chat-input').fill('测试上游故障降级');
+        // 发送命中花园语料的提问，确保真实触发上游 LLM 请求并命中 500 故障注入
+        await page.locator('#ai-chat-input').fill(`请结合 ${uniqueMarker} 测试上游故障降级`);
         await Promise.all([
             page.waitForResponse((r) => r.url().includes('/api/ai/chat')),
             page.locator('#btn-send-ai-chat').click(),
@@ -63,6 +64,7 @@ test.describe('P1/P2 AI 记忆回响、Agent 目标闭环与外部异常降级�
 
         expect(harness.state.pageErrors).toEqual([]);
         await expect(page.locator('#ai-chat-input')).toBeEnabled();
+        await expect(page.locator('#ai-chat-body')).toContainText(/当前大模型未响应|失败|错误|重试|异常|不可用/, { timeout: 5000 });
 
         await context.close();
     });
