@@ -73,6 +73,11 @@ export async function attachPwaHarness(context, options = {}) {
                     state.allowedEvents.push(`[allowed offline console] ${text.slice(0, 120)}`);
                     return;
                 }
+                const locUrl = msg.location?.()?.url || '';
+                if (!state.authenticated && text.includes('status of 401') && (!locUrl || locUrl.includes('/api/auth/me') || locUrl.includes('/api/auth/refresh'))) {
+                    state.allowedEvents.push(`[allowed pre-login 401 console] ${locUrl || text.slice(0, 120)}`);
+                    return;
+                }
                 state.consoleErrors.push(`[console.error] ${text}`);
             }
         });
