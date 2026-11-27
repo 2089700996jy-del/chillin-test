@@ -47,5 +47,5 @@ L2 通过 `src/support/local-d1.mjs`（`node:sqlite` 内存库加载 `CHILLIN_RO
 
 - **Phase 1（已完成）**：剥离 L2 业务集成测试出 Playwright 队列；清理 `bug-reporter.mjs` 静态硬编码缺陷表；沉淀设计文档。
 - **Phase 2（已完成）**：扩展 `fake-externals.mjs`（QWeather / Web Push / Email）；补齐 `agent-goals`、`bot-weather`、会话撤销、Wrangler `--test-scheduled` Cron 链路；为 Playwright 增加 `@smoke/@core/@full` 标签。
-- **Phase 3（已完成）**：落地 `registry/` 机器可读清单、`scripts/analyze-impact.mjs` 变更影响分析脚本与 `qa-suite.yml` 跨仓库触发工作流，并持续开展定向对抗性校验与真实恢复演练。
+- **Phase 3（已完成）**：落地 `registry/` 机器可读清单、`scripts/analyze-impact.mjs` 变更影响分析脚本与 `qa-suite.yml` 跨仓库触发工作流，并持续开展定向对抗性校验、真实 `backup-full`/`restore-full` 闭环演练（含独立临时 D1 SQL 预校验与非原子 R2→D1 边界保护）及真实 Worker `/__scheduled` 端到端链路验证。
 
