@@ -139,29 +139,52 @@ test.describe('RAG 多资源召回与跨账号权限隔离测试 @core', () => {
         expect(bookAAfterUploadB.ok()).toBe(true);
         expect(await bookAAfterUploadB.text()).toContain('第5章 A私密的章节 5');
 
-        // 账号 B 通过 /api/sync/batch 携带账号 A 的资源 ID 尝试批量劫持覆盖，绝不能修改账号 A 数据
+        // 账号 B 通过 /api/sync/batch 携带账号 A 的资源 ID 尝试批量劫持覆盖与批量软删除，绝不能修改或删除账号 A 数据
         const batchHijackRes = await pageB.request.post(`${base}/api/sync/batch`, {
             data: {
                 notes: [{ id: noteA.id, title: '越权批量覆盖', content: 'hijack', date: '2026-11-26' }],
                 feeds: [{ id: feedA.id, content: '越权批量覆盖随手记' }],
                 weeklies: [{ id: weeklyA.id, title: '越权批量覆盖周记', summary: 'hijack', content: 'hijack', date: '2026-11-26' }],
+                deleted: [
+                    { resource: 'notes', id: noteA.id },
+                    { resource: 'feeds', id: feedA.id },
+                    { resource: 'weeklies', id: weeklyA.id },
+                ],
             },
         });
         expect(batchHijackRes.status()).toBeLessThan(500);
-        const notesAAfterHijack = await (await pageA.request.get(`${base}/api/notes`)).json();
-        const noteACheck = notesAAfterHijack.find((n) => String(n.id) === String(noteA.id));
+        const batchBody = await batchHijackRes.json().catch(() => ({}));
+        const updatedIds = (batchBody.updated || []).map((u) => String(u.id));
+        expect(updatedIds, 'sync/batch 返回的 updated 不得包含账号 A 的任何资源 ID').not.toContain(String(noteA.id));
+        expect(updatedIds).not.toContain(String(feedA.id));
+        expect(updatedIds).not.toContain(String(weeklyA.id));
+
+        // 分别重新读取账号 A 的笔记、随手记、周记，验证无部分成功导致的数据破坏或软删除
+        const [notesAAfter, feedsAAfter, weekliesAAfter] = await Promise.all([
+            (await pageA.request.get(`${base}/api/notes`)).json(),
+            (await pageA.request.get(`${base}/api/feeds`)).json(),
+            (await pageA.request.get(`${base}/api/weeklies`)).json(),
+        ]);
+        const noteACheck = notesAAfter.find((n) => String(n.id) === String(noteA.id));
+        expect(noteACheck, '账号 A 笔记不得被批量删除').toBeTruthy();
+        expect(Boolean(noteACheck?.is_deleted)).toBe(false);
         expect(noteACheck?.title).toBe('A的私密笔记');
         expect(noteACheck?.content).toContain('A_SECRET_NOTE');
 
-        // 无 token 访问账号 A 的私有图片文件必须被拒绝或需要正确 token
+        const feedACheck = feedsAAfter.find((f) => String(f.id) === String(feedA.id));
+        expect(feedACheck, '账号 A 随手记不得被批量删除').toBeTruthy();
+        expect(Boolean(feedACheck?.is_deleted)).toBe(false);
+        expect(feedACheck?.content).toContain('A的私密随手记');
+
+        const weeklyACheck = weekliesAAfter.find((w) => String(w.id) === String(weeklyA.id));
+        expect(weeklyACheck, '账号 A 周记不得被批量删除').toBeTruthy();
+        expect(Boolean(weeklyACheck?.is_deleted)).toBe(false);
+        expect(weeklyACheck?.title).toBe('A的周记');
+
+        // 账号 B 访问账号 A 的私有图片文件（无 token 与带 B 会话访问原签名 URL）均不得泄露
         const bareFileUrl = uploadedA.src.split('?')[0];
         const fileNoToken = await pageB.request.get(`${base}${bareFileUrl}`);
         expect([401, 403, 404]).toContain(fileNoToken.status());
-
-        // 验证账号 A 的笔记未被账号 B 的覆盖请求破坏
-        const checkA = await pageA.request.get(`${base}/api/notes`);
-        const listA = await checkA.json();
-        expect(listA.find((n) => n.id === noteA.id)?.title).toBe('A的私密笔记');
 
         harnessA.assertNoBugs('Account Isolation 账号 A');
         harnessB.assertNoBugs('Account Isolation 账号 B');

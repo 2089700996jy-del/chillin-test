@@ -1,7 +1,9 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { CHILLIN_ROOT } from '../src/env/ports.mjs';
 import { attachPwaHarness } from '../src/support/pwa-harness.mjs';
@@ -151,14 +153,98 @@ test.describe('Backup & Restore 全量导出与干净库恢复完整性验证', 
         await context.close();
     });
 
-    test('调用主仓真实 restore-drill 脚本在隔离临时目录完成清单哈希、恢复演练与篡改拦截', async () => {
+    test('调用主仓真实 restore-drill 与 restore-full --dry-run --local 校验备份包并拦截损坏', async () => {
         const drillScript = path.join(CHILLIN_ROOT, 'scripts', 'restore-drill.mjs');
+        const restoreFullScript = path.join(CHILLIN_ROOT, 'scripts', 'restore-full.mjs');
+        const backupKitUrl = pathToFileURL(path.join(CHILLIN_ROOT, 'scripts', 'backup-kit.mjs')).href;
         expect(fs.existsSync(drillScript), `缺少主仓恢复演练脚本: ${drillScript}`).toBe(true);
-        const output = execFileSync(process.execPath, [drillScript], {
+        expect(fs.existsSync(restoreFullScript), `缺少主仓恢复脚本: ${restoreFullScript}`).toBe(true);
+
+        const drillOutput = execFileSync(process.execPath, [drillScript], {
             cwd: CHILLIN_ROOT,
             encoding: 'utf8',
             timeout: 60_000,
         });
-        expect(output).toMatch(/drill|校验|ok|通过|restore/i);
+        expect(drillOutput).toMatch(/drill|校验|ok|通过|restore/i);
+
+        // 构造隔离临时目录的完整 backup-kit 备份包，直接调用主仓 restore-full.mjs --dry-run --local 验证
+        const { BACKUP_FORMAT, MANIFEST_NAME, MANIFEST_HASH_NAME, sha256File, sha256Text } = await import(backupKitUrl);
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chillin-qa-restore-'));
+        try {
+            const r2Rel = path.join('r2', 'uploads', '1', 'qa-sample.png');
+            const r2Abs = path.join(tmpDir, r2Rel);
+            fs.mkdirSync(path.dirname(r2Abs), { recursive: true });
+            fs.writeFileSync(r2Abs, samplePngBuffer());
+
+            const sqlText = "CREATE TABLE notes (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT, content TEXT, date TEXT);\n"
+                + "INSERT INTO notes (id, user_id, title, content, date) VALUES (1, 1, 'restore-test', 'ok', '2026-11-27');\n";
+            const d1Abs = path.join(tmpDir, 'chillin-d1.sql.gz');
+            fs.writeFileSync(d1Abs, zlib.gzipSync(Buffer.from(sqlText), { level: 9 }));
+
+            const r2Stat = fs.statSync(r2Abs);
+            const d1Stat = fs.statSync(d1Abs);
+            const manifest = {
+                format: BACKUP_FORMAT,
+                createdAt: new Date().toISOString(),
+                appVersion: 'qa-e2e',
+                target: 'local',
+                complete: true,
+                hashAlgorithm: 'sha256',
+                d1: {
+                    binding: 'DB',
+                    file: 'chillin-d1.sql.gz',
+                    size: d1Stat.size,
+                    sha256: await sha256File(d1Abs),
+                    sqlBytes: Buffer.byteLength(sqlText),
+                    sqlSha256: sha256Text(sqlText),
+                    tables: ['notes'],
+                    migrations: [],
+                },
+                r2: {
+                    bucket: 'chillin-media',
+                    objects: [{
+                        key: 'uploads/1/qa-sample.png',
+                        category: 'image',
+                        id: 'qa-sample',
+                        expectedSize: r2Stat.size,
+                        mime: 'image/png',
+                        path: 'r2/uploads/1/qa-sample.png',
+                        size: r2Stat.size,
+                        sha256: await sha256File(r2Abs),
+                        status: 'ok',
+                    }],
+                    totals: { objects: 1, bytes: r2Stat.size },
+                    excludes: [],
+                },
+                restore: { command: 'qa-dry-run' },
+                notes: [],
+            };
+            const manifestPath = path.join(tmpDir, MANIFEST_NAME);
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+            fs.writeFileSync(path.join(tmpDir, MANIFEST_HASH_NAME), (await sha256File(manifestPath)) + '\n');
+
+            const okRun = spawnSync(process.execPath, [restoreFullScript, tmpDir, '--dry-run', '--local'], {
+                cwd: CHILLIN_ROOT,
+                encoding: 'utf8',
+                timeout: 30_000,
+            });
+            expect(okRun.status, `restore-full --dry-run 失败: ${okRun.stderr}`).toBe(0);
+            expect(okRun.stdout).toContain('校验通过');
+            expect(okRun.stdout).toContain('dry-run 完成');
+
+            // 破坏 R2 对象 1 个字节：restore-full 必须拒绝恢复并非零退出
+            const corrupted = fs.readFileSync(r2Abs);
+            corrupted[0] = corrupted[0] ^ 0xff;
+            fs.writeFileSync(r2Abs, corrupted);
+            const badRun = spawnSync(process.execPath, [restoreFullScript, tmpDir, '--dry-run', '--local'], {
+                cwd: CHILLIN_ROOT,
+                encoding: 'utf8',
+                timeout: 30_000,
+            });
+            expect(badRun.status).not.toBe(0);
+            expect(badRun.stderr).toContain('校验失败');
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
     });
 });

@@ -34,20 +34,63 @@ jobs:
         with:
           path: chillin-test
 
+      - name: Validate external workflow/dispatch inputs
+        id: validate_inputs
+        env:
+          CLIENT_SHA: ${{ github.event.client_payload.sha }}
+          CLIENT_BEFORE: ${{ github.event.client_payload.before }}
+          INPUT_REF: ${{ github.event.inputs.chillin_ref }}
+          INPUT_TIER: ${{ github.event.inputs.tier }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const shaRe = /^[0-9a-f]{40}$/i;
+            const refRe = /^(?!-)[A-Za-z0-9_./-]{1,128}$/;
+            const allowedTiers = new Set(["auto", "smoke", "core", "full"]);
+
+            const clientSha = (process.env.CLIENT_SHA || "").trim();
+            const clientBefore = (process.env.CLIENT_BEFORE || "").trim();
+            const inputRef = (process.env.INPUT_REF || "main").trim();
+            const inputTier = (process.env.INPUT_TIER || "auto").trim();
+
+            if (clientSha && !shaRe.test(clientSha)) {
+              throw new Error("Invalid client_payload.sha: " + clientSha.slice(0, 40));
+            }
+            if (clientBefore && !shaRe.test(clientBefore)) {
+              throw new Error("Invalid client_payload.before: " + clientBefore.slice(0, 40));
+            }
+            if (!refRe.test(inputRef) || inputRef.includes("..")) {
+              throw new Error("Invalid chillin_ref: " + inputRef.slice(0, 40));
+            }
+            if (!allowedTiers.has(inputTier)) {
+              throw new Error("Invalid tier: " + inputTier);
+            }
+
+            const targetRef = clientSha || inputRef || "main";
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+              `target_ref=${targetRef}`,
+              `expected_sha=${clientSha}`,
+              `base_sha=${clientBefore}`,
+              `input_tier=${inputTier}`,
+            ].join("\n") + "\n");
+          '
+
       - name: Checkout chillin (exact target commit)
         uses: actions/checkout@v4
         with:
           repository: 2089700996jy-del/chillin
-          ref: ${{ github.event.client_payload.sha || github.event.inputs.chillin_ref || 'main' }}
+          ref: ${{ steps.validate_inputs.outputs.target_ref }}
           token: ${{ secrets.CHILLIN_READ_TOKEN || github.token }}
           fetch-depth: 0
           path: chillin
 
       - name: Verify exact Chillin commit checkout
         working-directory: chillin
+        env:
+          EXPECTED_SHA: ${{ steps.validate_inputs.outputs.expected_sha }}
         run: |
           ACTUAL_SHA="$(git rev-parse HEAD)"
-          EXPECTED_SHA="${{ github.event.client_payload.sha }}"
           echo "Checked out Chillin SHA: $ACTUAL_SHA"
           if [ -n "$EXPECTED_SHA" ] && [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
             echo "::error::Checkout mismatch! Expected $EXPECTED_SHA, got $ACTUAL_SHA"
@@ -74,23 +117,31 @@ jobs:
         working-directory: chillin-test
         env:
           CHILLIN_ROOT: ${{ github.workspace }}/chillin
+          BASE_REF: ${{ steps.validate_inputs.outputs.base_sha }}
+          HEAD_REF: ${{ steps.validate_inputs.outputs.expected_sha }}
         run: |
-          BASE_REF="${{ github.event.client_payload.before || 'HEAD~1' }}"
-          HEAD_REF="${{ github.event.client_payload.sha || 'HEAD' }}"
-          node scripts/analyze-impact.mjs --base "$BASE_REF" --head "$HEAD_REF"
+          if [ -n "$BASE_REF" ]; then
+            node scripts/analyze-impact.mjs --base "$BASE_REF" --head "${HEAD_REF:-HEAD}"
+          else
+            node scripts/analyze-impact.mjs --head "${HEAD_REF:-HEAD}"
+          fi
 
       - name: Resolve execution tier
         id: resolve_tier
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TIER: ${{ steps.validate_inputs.outputs.input_tier }}
+          IMPACT_TIER: ${{ steps.impact.outputs.tier }}
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
+          if [ "$EVENT_NAME" = "schedule" ]; then
             TIER="full"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.tier }}" != "auto" ]; then
-            TIER="${{ github.event.inputs.tier }}"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_TIER" != "auto" ]; then
+            TIER="$INPUT_TIER"
           else
-            TIER="${{ steps.impact.outputs.tier || 'core' }}"
+            TIER="${IMPACT_TIER:-core}"
           fi
           echo "tier=$TIER" >> "$GITHUB_OUTPUT"
-          echo "Selected QA tier: $TIER (impact=${{ steps.impact.outputs.tier }}, event=${{ github.event_name }})"
+          echo "Selected QA tier: $TIER (impact=$IMPACT_TIER, event=$EVENT_NAME)"
 
       - name: Run L2 integration tests
         if: steps.resolve_tier.outputs.tier == 'core' || steps.resolve_tier.outputs.tier == 'full'

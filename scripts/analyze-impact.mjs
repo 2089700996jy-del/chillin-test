@@ -8,59 +8,92 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { CHILLIN_ROOT, TEST_ROOT, TMP_DIR } from '../src/env/ports.mjs';
 
 const TIER_RANK = { smoke: 1, core: 2, full: 3 };
 const ZERO_SHA = /^0+$/;
+const SAFE_GIT_REF_RE = /^(?!-)[A-Za-z0-9_./~^-]{1,128}$/;
+
+export function isSafeGitRef(ref) {
+    return typeof ref === 'string' && SAFE_GIT_REF_RE.test(ref) && !ref.includes('..') && !ref.includes('@{');
+}
 
 function parseArgs(argv) {
-    const out = { base: 'HEAD~1', head: 'HEAD', files: null, json: false };
+    const out = { base: 'HEAD~1', head: 'HEAD', baseExplicit: false, files: null, json: false };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
-        if (a === '--base' && argv[i + 1]) out.base = argv[++i];
-        else if (a === '--head' && argv[i + 1]) out.head = argv[++i];
-        else if (a === '--files' && argv[i + 1]) out.files = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
-        else if (a === '--json') out.json = true;
+        if (a === '--base' && argv[i + 1]) {
+            out.base = argv[++i];
+            out.baseExplicit = true;
+        } else if (a === '--head' && argv[i + 1]) {
+            out.head = argv[++i];
+        } else if (a === '--files' && argv[i + 1]) {
+            out.files = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
+        } else if (a === '--json') {
+            out.json = true;
+        }
     }
     return out;
 }
 
+function runGit(args) {
+    return execFileSync('git', args, { cwd: CHILLIN_ROOT, encoding: 'utf8' });
+}
+
 function commitExists(ref) {
-    if (!ref || ZERO_SHA.test(ref)) return false;
+    if (!isSafeGitRef(ref) || ZERO_SHA.test(ref)) return false;
     try {
-        execSync(`git cat-file -e "${ref}^{commit}"`, { cwd: CHILLIN_ROOT, stdio: 'ignore' });
+        execFileSync('git', ['cat-file', '-e', `${ref}^{commit}`], { cwd: CHILLIN_ROOT, stdio: 'ignore' });
         return true;
     } catch {
         return false;
     }
 }
 
-function resolveDiffInputs(baseArg, headArg) {
-    const head = commitExists(headArg) ? headArg : 'HEAD';
+export function resolveDiffInputs(baseArg, headArg, baseExplicit = true) {
+    if (!isSafeGitRef(headArg) || !commitExists(headArg)) {
+        return {
+            mode: 'unresolved',
+            base: null,
+            head: 'HEAD',
+            baselineResolved: false,
+            note: `invalid or unavailable head ref (${String(headArg || '').slice(0, 40)}); escalating to full`,
+        };
+    }
+
     if (commitExists(baseArg)) {
-        return { mode: 'range', base: baseArg, head, baselineResolved: true };
+        return { mode: 'range', base: baseArg, head: headArg, baselineResolved: true };
     }
-    const parentRef = `${head}~1`;
-    if (commitExists(parentRef)) {
-        return { mode: 'range', base: parentRef, head, baselineResolved: true, note: `fallback from unavailable base (${baseArg || 'empty'}) to ${parentRef}` };
+
+    // Explicit all-zero / missing / invalid base cannot reliably prove diff scope: must escalate to full
+    const reason = !isSafeGitRef(baseArg)
+        ? `unsafe or invalid base ref (${String(baseArg || '').slice(0, 40)})`
+        : ZERO_SHA.test(baseArg)
+            ? 'zero before SHA (initial push/new branch)'
+            : `unavailable base ref (${baseArg})`;
+
+    const parentRef = `${headArg}~1`;
+    if (!baseExplicit && commitExists(parentRef)) {
+        return { mode: 'range', base: parentRef, head: headArg, baselineResolved: true };
     }
-    // Initial commit (no parent): inspect tree of head
-    return { mode: 'initial', base: null, head, baselineResolved: false, note: 'initial commit or missing git history; expanding to full' };
+
+    return {
+        mode: commitExists(parentRef) ? 'range-unverified' : 'initial',
+        base: commitExists(parentRef) ? parentRef : null,
+        head: headArg,
+        baselineResolved: false,
+        note: `${reason}; escalating to full`,
+    };
 }
 
 function getChangedFiles(diffInfo) {
+    if (diffInfo.mode === 'unresolved') return [];
     if (diffInfo.mode === 'initial') {
-        const raw = execSync(`git -c core.quotePath=false diff-tree --no-commit-id --name-status -r ${diffInfo.head}`, {
-            cwd: CHILLIN_ROOT,
-            encoding: 'utf8',
-        });
+        const raw = runGit(['-c', 'core.quotePath=false', 'diff-tree', '--no-commit-id', '--name-status', '-r', diffInfo.head]);
         return parseNameStatus(raw);
     }
-    const raw = execSync(`git -c core.quotePath=false diff --name-status ${diffInfo.base}..${diffInfo.head}`, {
-        cwd: CHILLIN_ROOT,
-        encoding: 'utf8',
-    });
+    const raw = runGit(['-c', 'core.quotePath=false', 'diff', '--name-status', `${diffInfo.base}..${diffInfo.head}`]);
     return parseNameStatus(raw);
 }
 
@@ -71,11 +104,10 @@ function parseNameStatus(raw) {
         if (!trimmed) continue;
         const parts = trimmed.split(/\t+/);
         const status = parts[0] || 'M';
-        // For renames (R100 old new), include both paths so deletion/addition rules both fire
         if (status.startsWith('R') && parts.length >= 3) {
             entries.push({ status: 'D', file: parts[1] });
             entries.push({ status: 'A', file: parts[2] });
-        } else {
+        } else if (parts[1]) {
             entries.push({ status: status[0], file: parts[1] });
         }
     }
@@ -83,12 +115,9 @@ function parseNameStatus(raw) {
 }
 
 function detectApiRouteChanges(diffInfo, changedFiles) {
-    if (!changedFiles.includes('workers/api.js') || diffInfo.mode !== 'range') return [];
+    if (!changedFiles.includes('workers/api.js') || !diffInfo.base) return [];
     try {
-        const diff = execSync(`git diff -U0 ${diffInfo.base}..${diffInfo.head} -- workers/api.js`, {
-            cwd: CHILLIN_ROOT,
-            encoding: 'utf8',
-        });
+        const diff = runGit(['diff', '-U0', `${diffInfo.base}..${diffInfo.head}`, '--', 'workers/api.js']);
         const routes = new Set();
         for (const line of diff.split(/\r?\n/)) {
             if (!line.startsWith('+') || line.startsWith('+++')) continue;
@@ -126,7 +155,7 @@ function main() {
     if (args.files) {
         entries = args.files.map((file) => ({ status: 'M', file }));
     } else {
-        diffInfo = resolveDiffInputs(args.base, args.head);
+        diffInfo = resolveDiffInputs(args.base, args.head, args.baseExplicit);
         entries = getChangedFiles(diffInfo);
     }
 
@@ -140,7 +169,6 @@ function main() {
     const newMigrations = changedFiles.filter((f) => /^migrations\/.*\.sql$/.test(f));
     const newApiRoutes = args.files ? [] : detectApiRouteChanges(diffInfo, changedFiles);
 
-    // If baseline could not be resolved (e.g. initial commit / force-push), escalate safely to full
     let recommendedTier = !diffInfo.baselineResolved ? 'full' : 'smoke';
 
     for (const entry of entries) {
@@ -164,20 +192,18 @@ function main() {
                 recommendedTier = fallbackTier;
             }
         }
-        // Deleting a production file is high risk: escalate at least to core
         if (entry.status === 'D' && !isIgnorable && TIER_RANK.core > TIER_RANK[recommendedTier]) {
             recommendedTier = 'core';
         }
     }
 
-    // Adding new API routes or migrations always requires at least full/core verification
     if (newMigrations.length > 0 || newApiRoutes.length > 0) {
         recommendedTier = 'full';
     }
 
     const headSha = (() => {
         try {
-            return execSync('git rev-parse --short HEAD', { cwd: CHILLIN_ROOT, encoding: 'utf8' }).trim();
+            return runGit(['rev-parse', '--short', 'HEAD']).trim();
         } catch {
             return 'unknown';
         }
@@ -188,7 +214,7 @@ function main() {
         chillinSha: headSha,
         baselineResolved: diffInfo.baselineResolved,
         baselineNote: diffInfo.note || null,
-        range: args.files ? 'manual-files' : (diffInfo.mode === 'initial' ? `initial:${diffInfo.head}` : `${diffInfo.base}..${diffInfo.head}`),
+        range: args.files ? 'manual-files' : (diffInfo.base ? `${diffInfo.base}..${diffInfo.head}` : `${diffInfo.mode}:${diffInfo.head}`),
         changedFilesCount: changedFiles.length,
         changedFiles,
         addedFiles,
