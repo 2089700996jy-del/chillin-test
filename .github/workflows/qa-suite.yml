@@ -135,12 +135,21 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Upload QA report & artifacts
+      - name: Upload QA summary (lightweight, 3 days)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: chillin-qa-report-${{ steps.resolve_tier.outputs.tier }}
+          retention-days: 3
           path: |
             chillin-test/test-results/bug-report.md
-            chillin-test/playwright-report/
             chillin-test/.tmp/impact-report.json
+
+      - name: Upload Playwright debug report on failure (3 days)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chillin-qa-debug-${{ steps.resolve_tier.outputs.tier }}
+          retention-days: 3
+          path: |
+            chillin-test/playwright-report/
