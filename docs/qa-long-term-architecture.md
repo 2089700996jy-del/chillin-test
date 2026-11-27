@@ -43,9 +43,9 @@ L2 通过 `src/support/local-d1.mjs`（`node:sqlite` 内存库加载 `CHILLIN_RO
 - **三阶段对抗性审查**：仅用于 ① 基础设施防漏/防误连生产审查、② P0/高危用例反例质询（防浅层断言与同源错误自证）、③ 季度定向 Mutation Testing。
 - **自动演进规划（Phase 3）**：建立 `registry/`（`quality-model.json`、`impact-map.json`、`test-catalog.json`），基于 `chillin` Git Diff（`migrations/`、路由、核心同步/安全文件）自动识别受影响测试与覆盖缺口；AI 仅生成受影响清单与候选草案，**严禁自动放宽断言**。
 
-## 4. 实施路线
+## 4. 实施路线与当前状态
 
-- **Phase 1（当前阶段）**：剥离 L2 业务集成测试出 Playwright 队列；清理 `bug-reporter.mjs` 静态硬编码缺陷表；沉淀设计文档。
-- **Phase 2**：扩展 `fake-externals.mjs`（QWeather / Web Push / Email）；补齐 `agent-goals`、`bot-weather`、会话撤销、Wrangler `--test-scheduled` Cron 链路；为 Playwright 增加 `@smoke/@core/@full` 标签。
-- **Phase 3**：落地 `registry/` 机器可读清单、变更影响分析脚本与跨仓库触发工作流（待配置跨仓 GitHub 权限后启用），并开展首次定向 Mutation 检验。
+- **Phase 1（已完成）**：剥离 L2 业务集成测试出 Playwright 队列；清理 `bug-reporter.mjs` 静态硬编码缺陷表；沉淀设计文档。
+- **Phase 2（已完成）**：扩展 `fake-externals.mjs`（QWeather / Web Push / Email）；补齐 `agent-goals`、`bot-weather`、会话撤销、Wrangler `--test-scheduled` Cron 链路；为 Playwright 增加 `@smoke/@core/@full` 标签。
+- **Phase 3（已完成）**：落地 `registry/` 机器可读清单、`scripts/analyze-impact.mjs` 变更影响分析脚本与 `qa-suite.yml` 跨仓库触发工作流，并持续开展定向对抗性校验与真实恢复演练。
 

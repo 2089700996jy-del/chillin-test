@@ -46,15 +46,21 @@ jobs:
           node -e '
             const fs = require("fs");
             const shaRe = /^[0-9a-f]{40}$/i;
+            const zeroShaRe = /^0{40}$/;
             const refRe = /^(?!-)[A-Za-z0-9_./-]{1,128}$/;
             const allowedTiers = new Set(["auto", "smoke", "core", "full"]);
 
+            const eventName = (process.env.EVENT_NAME || "").trim();
             const clientSha = (process.env.CLIENT_SHA || "").trim();
             const clientBefore = (process.env.CLIENT_BEFORE || "").trim();
             const inputRef = (process.env.INPUT_REF || "main").trim();
             const inputTier = (process.env.INPUT_TIER || "auto").trim();
 
-            if (clientSha && !shaRe.test(clientSha)) {
+            if (eventName === "repository_dispatch") {
+              if (!clientSha || !shaRe.test(clientSha) || zeroShaRe.test(clientSha)) {
+                throw new Error("repository_dispatch requires valid non-zero client_payload.sha, got: " + JSON.stringify(clientSha));
+              }
+            } else if (clientSha && (!shaRe.test(clientSha) || zeroShaRe.test(clientSha))) {
               throw new Error("Invalid client_payload.sha: " + clientSha.slice(0, 40));
             }
             if (clientBefore && !shaRe.test(clientBefore)) {
@@ -67,12 +73,14 @@ jobs:
               throw new Error("Invalid tier: " + inputTier);
             }
 
-            const targetRef = clientSha || inputRef || "main";
+            const targetRef = eventName === "repository_dispatch" ? clientSha : (clientSha || inputRef || "main");
+            const missingDispatchBefore = eventName === "repository_dispatch" && (!clientBefore || zeroShaRe.test(clientBefore));
             fs.appendFileSync(process.env.GITHUB_OUTPUT, [
               `target_ref=${targetRef}`,
               `expected_sha=${clientSha}`,
               `base_sha=${clientBefore}`,
               `input_tier=${inputTier}`,
+              `missing_dispatch_before=${missingDispatchBefore}`,
             ].join("\n") + "\n");
           '
 
@@ -117,10 +125,17 @@ jobs:
         working-directory: chillin-test
         env:
           CHILLIN_ROOT: ${{ github.workspace }}/chillin
+          EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ steps.validate_inputs.outputs.base_sha }}
           HEAD_REF: ${{ steps.validate_inputs.outputs.expected_sha }}
         run: |
-          if [ -n "$BASE_REF" ]; then
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            if [ -n "$BASE_REF" ]; then
+              node scripts/analyze-impact.mjs --require-base --base "$BASE_REF" --head "$HEAD_REF"
+            else
+              node scripts/analyze-impact.mjs --require-base --head "$HEAD_REF"
+            fi
+          elif [ -n "$BASE_REF" ]; then
             node scripts/analyze-impact.mjs --base "$BASE_REF" --head "${HEAD_REF:-HEAD}"
           else
             node scripts/analyze-impact.mjs --head "${HEAD_REF:-HEAD}"
@@ -132,16 +147,27 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_TIER: ${{ steps.validate_inputs.outputs.input_tier }}
           IMPACT_TIER: ${{ steps.impact.outputs.tier }}
+          MISSING_DISPATCH_BEFORE: ${{ steps.validate_inputs.outputs.missing_dispatch_before }}
         run: |
           if [ "$EVENT_NAME" = "schedule" ]; then
             TIER="full"
-          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_TIER" != "auto" ]; then
-            TIER="$INPUT_TIER"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$INPUT_TIER" != "auto" ]; then
+              TIER="$INPUT_TIER"
+            else
+              TIER="${IMPACT_TIER:-core}"
+            fi
+          elif [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            if [ "$MISSING_DISPATCH_BEFORE" = "true" ]; then
+              TIER="full"
+            else
+              TIER="${IMPACT_TIER:-full}"
+            fi
           else
             TIER="${IMPACT_TIER:-core}"
           fi
           echo "tier=$TIER" >> "$GITHUB_OUTPUT"
-          echo "Selected QA tier: $TIER (impact=$IMPACT_TIER, event=$EVENT_NAME)"
+          echo "Selected QA tier: $TIER (impact=$IMPACT_TIER, event=$EVENT_NAME, missing_dispatch_before=$MISSING_DISPATCH_BEFORE)"
 
       - name: Run L2 integration tests
         if: steps.resolve_tier.outputs.tier == 'core' || steps.resolve_tier.outputs.tier == 'full'

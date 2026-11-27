@@ -118,7 +118,7 @@ test.describe('Reader 云端书库、跨端进度、软删除墓碑、显式重�
         const arrAfterReimport = Array.isArray(listAfterReimportJson) ? listAfterReimportJson : (listAfterReimportJson.books || []);
         expect(arrAfterReimport.some((b) => b.book_key === bookKey)).toBe(true);
 
-        // 5. 并发删除与上传：不应产生 500 内部错误
+        // 5. 并发删除与上传：不应产生 500 内部错误，且最终 D1、墓碑、R2 正文与另一台设备视图必须保持一致
         const [concDel, concPut] = await Promise.all([
             pageA.request.delete(`${base}/api/reader/books/${encodeURIComponent(bookKey)}`),
             pageA.request.post(
@@ -128,6 +128,43 @@ test.describe('Reader 云端书库、跨端进度、软删除墓碑、显式重�
         ]);
         expect(concDel.status()).toBeLessThan(500);
         expect(concPut.status()).toBeLessThan(500);
+        expect([200, 204, 404, 409]).toContain(concDel.status());
+        expect([200, 201, 409]).toContain(concPut.status());
+
+        const finalActiveRes = await pageA.request.get(`${base}/api/reader/books`);
+        expect(finalActiveRes.ok()).toBe(true);
+        const finalActiveJson = await finalActiveRes.json();
+        const finalActiveList = Array.isArray(finalActiveJson) ? finalActiveJson : (finalActiveJson.books || []);
+        const activeBook = finalActiveList.find((b) => b.book_key === bookKey);
+
+        const finalAllRes = await pageA.request.get(`${base}/api/reader/books?include_deleted=1`);
+        expect(finalAllRes.ok()).toBe(true);
+        const finalAllJson = await finalAllRes.json();
+        const finalAllList = Array.isArray(finalAllJson) ? finalAllJson : (finalAllJson.books || []);
+        const finalRow = finalAllList.find((b) => b.book_key === bookKey);
+        expect(finalRow, '并发删传后 D1 必须保留明确书目/墓碑记录').toBeTruthy();
+
+        const finalBodyRes = await pageA.request.get(`${base}/api/reader/books/${encodeURIComponent(bookKey)}`);
+        if (activeBook) {
+            expect(Boolean(finalRow.is_deleted)).toBe(false);
+            expect(finalBodyRes.ok(), '书目处于激活态时 R2 正文必须完整可读').toBe(true);
+            const finalBodyText = await finalBodyRes.text();
+            expect(finalBodyText).toBe(bookBodyText);
+        } else {
+            expect(Boolean(finalRow.is_deleted)).toBe(true);
+            expect(finalBodyRes.status(), '书目处于墓碑态时正文接口不得返回 200').toBe(404);
+        }
+
+        // 设备 B 重新登录后验证书架最终状态与设备 A 完全一致
+        await pageB.reload({ waitUntil: 'load' });
+        await expect(pageB.locator('#auth-overlay')).toHaveClass(/hidden/, { timeout: 15_000 });
+        await pageB.locator('.mobile-tab-item[data-view="reader"]').click();
+        const cardBFinal = pageB.locator('#bookshelf-grid .book-card', { hasText: '云端同步小说' });
+        if (activeBook) {
+            await expect(cardBFinal).toBeVisible({ timeout: 10_000 });
+        } else {
+            await expect(cardBFinal).toHaveCount(0);
+        }
 
         harnessA.assertNoBugs('Reader 跨端设备 A');
         harnessB.assertNoBugs('Reader 跨端设备 B');

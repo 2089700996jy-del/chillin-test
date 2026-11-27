@@ -8,7 +8,7 @@ import { uniqueUser, samplePngBuffer, sampleTxtBookBuffer } from '../src/support
 
 test.describe('RAG 多资源召回与跨账号权限隔离测试 @core', () => {
     test.afterEach(async () => {
-        await setExternalFaultMode({ mode: 'ok', delayMs: 0, clearRequests: true }).catch(() => {});
+        await setExternalFaultMode({ mode: 'ok', delayMs: 0, clearRequests: true }).catch(() => { });
     });
 
     test('Account Isolation：两个账号所有数据接口、文件与阅读器资源严格不可跨账号访问或覆盖', async ({ browser }) => {
@@ -234,17 +234,23 @@ test.describe('RAG 多资源召回与跨账号权限隔离测试 @core', () => {
         const llmCtx = JSON.stringify(extState.requests.map((r) => r.messages));
         expect(llmCtx).toContain('星云协议_NOTE_EVIDENCE');
         expect(llmCtx).toContain('星云协议_FEED_EVIDENCE');
+        expect(llmCtx).toContain('星云协议_WEEKLY_EVIDENCE');
         expect(llmCtx).not.toContain('B_SECRET_DO_NOT_LEAK');
 
-        // 2. 无结果查询：不存在的关键词不返回错误召回
+        // 2. 无结果查询：不存在的关键词不返回错误召回，也不应伪造星云协议证据
         await setExternalFaultMode({ mode: 'ok', delayMs: 0, clearRequests: true });
         const emptyRes = await pageA.request.post(`${base}/api/ai/chat`, {
             data: { question: '完全不存在的火星词_ZZZ999' },
         });
         expect(emptyRes.ok()).toBe(true);
+        const emptyData = await emptyRes.json();
         const extEmpty = await getExternalControlState();
         const emptyCtx = JSON.stringify(extEmpty.requests.map((r) => r.messages));
         expect(emptyCtx).not.toContain('B_SECRET_DO_NOT_LEAK');
+        expect(emptyCtx).not.toContain('星云协议_NOTE_EVIDENCE');
+        expect(emptyCtx).not.toContain('星云协议_FEED_EVIDENCE');
+        expect(emptyCtx).not.toContain('星云协议_WEEKLY_EVIDENCE');
+        expect(JSON.stringify(emptyData)).not.toContain('星云协议_');
 
         harnessA.assertNoBugs('RAG 测试账号 A');
         harnessB.assertNoBugs('RAG 测试账号 B');

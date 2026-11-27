@@ -5,7 +5,7 @@ import {
     injectAxeInitScript,
     runAxeScan,
 } from '../src/support/pwa-harness.mjs';
-import { uniqueUser } from '../src/support/test-data.mjs';
+import { uniqueUser, sampleTxtBookBuffer } from '../src/support/test-data.mjs';
 
 test.describe('P2 主动找 Bug 破坏性探针（生命周期/竞态/XSS/三主题对比度）', () => {
     test('探针 1：笔记编辑防抖期间切后台 (visibilitychange) + 刷新，验证草稿不丢失', async ({ browser }) => {
@@ -169,6 +169,79 @@ test.describe('P2 主动找 Bug 破坏性探针（生命周期/竞态/XSS/三主
         }
         expect(allViolations, `检测到 WCAG 2.1 AA 可访问性/对比度违规:\n${JSON.stringify(allViolations, null, 2)}`).toEqual([]);
         harness.assertNoBugs('三主题对比度与溢出审计');
+        await context.close();
+    });
+
+    test('探针 4B：阅读器界面日间/夜间/护眼三主题 WCAG AA、布局遮挡与刷新持久化审计', async ({ browser }) => {
+        const context = await browser.newContext({ reducedMotion: 'reduce' });
+        await injectAxeInitScript(context);
+        const harness = await attachPwaHarness(context);
+        const page = await context.newPage();
+        const user = uniqueUser('reader3theme');
+
+        await harness.registerAndEnter(page, user);
+        await page.locator('.mobile-tab-item[data-view="reader"]').click();
+        await Promise.all([
+            page.waitForResponse((r) => r.url().includes('/api/reader/books') && r.request().method() === 'POST' && r.ok()),
+            page.locator('#book-file-input').setInputFiles({
+                name: '三主题阅读审计.txt',
+                mimeType: 'text/plain',
+                buffer: sampleTxtBookBuffer('三主题审计'),
+            }),
+        ]);
+
+        const bookCard = page.locator('#bookshelf-grid .book-card', { hasText: '三主题阅读审计' });
+        await expect(bookCard).toBeVisible({ timeout: 15_000 });
+        await bookCard.click();
+        await expect(page.locator('#view-reader-book')).toHaveClass(/active/, { timeout: 10_000 });
+        await expect(page.locator('#chapter-title-display')).not.toHaveText('—');
+        await expect(page.locator('#chapter-body')).toContainText('正文内容');
+
+        const readerViolations = [];
+        for (const rTheme of ['light', 'dark', 'eyecare']) {
+            await page.locator('#btn-reader-typography-toggle').click();
+            await expect(page.locator('#reader-typography-modal')).toBeVisible();
+            const swatch = page.locator(`#reader-theme-swatches .theme-swatch-item[data-theme-swatch="${rTheme}"]`);
+            await expect(swatch).toBeVisible();
+            await swatch.click();
+            await page.keyboard.press('Escape');
+
+            if (rTheme === 'dark') {
+                await expect(page.locator('body')).toHaveClass(/dark-reader-body/);
+            } else if (rTheme === 'eyecare') {
+                await expect(page.locator('body')).toHaveClass(/eyecare-reader-body/);
+            } else {
+                await expect(page.locator('body')).not.toHaveClass(/dark-reader-body|eyecare-reader-body/);
+            }
+
+            // 检查正文、背景、章节标题、工具栏、翻页按钮可见且无遮挡/溢出
+            for (const sel of ['#chapter-title-display', '#chapter-body', '#btn-reader-typography-toggle', '#btn-prev-chapter', '#btn-next-chapter']) {
+                await expect(page.locator(sel), `主题 ${rTheme} 下 ${sel} 不可见`).toBeVisible();
+                const box = await page.locator(sel).boundingBox();
+                expect(box && box.width > 0 && box.height > 0, `主题 ${rTheme} 下 ${sel} 尺寸异常`).toBe(true);
+            }
+            const bgColor = await page.locator('#reader-content-area').evaluate((el) => getComputedStyle(el).backgroundColor);
+            const txtColor = await page.locator('#chapter-body').evaluate((el) => getComputedStyle(el).color);
+            expect(bgColor).not.toBe(txtColor);
+
+            await assertNoMobileOverflow(page, `reader/${rTheme}`);
+            const axeRes = await runAxeScan(page, `reader/${rTheme}`);
+            if (axeRes.violations.length) {
+                readerViolations.push(axeRes);
+            }
+        }
+
+        expect(readerViolations, `阅读器三主题检测到 WCAG 2.1 AA 违规:\n${JSON.stringify(readerViolations, null, 2)}`).toEqual([]);
+
+        // 验证最后切换的 eyecare 主题在刷新页面并重新打开书籍后仍恢复
+        await page.reload({ waitUntil: 'load' });
+        await expect(page.locator('#auth-overlay')).toHaveClass(/hidden/, { timeout: 15_000 });
+        await page.locator('.mobile-tab-item[data-view="reader"]').click();
+        await page.locator('#bookshelf-grid .book-card', { hasText: '三主题阅读审计' }).click();
+        await expect(page.locator('#view-reader-book')).toHaveClass(/active/, { timeout: 10_000 });
+        await expect(page.locator('body')).toHaveClass(/eyecare-reader-body/);
+
+        harness.assertNoBugs('阅读器三主题 WCAG 与布局持久化审计');
         await context.close();
     });
 

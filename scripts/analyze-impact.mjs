@@ -20,7 +20,7 @@ export function isSafeGitRef(ref) {
 }
 
 function parseArgs(argv) {
-    const out = { base: 'HEAD~1', head: 'HEAD', baseExplicit: false, files: null, json: false };
+    const out = { base: 'HEAD~1', head: 'HEAD', baseExplicit: false, requireBase: false, files: null, json: false };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--base' && argv[i + 1]) {
@@ -28,6 +28,8 @@ function parseArgs(argv) {
             out.baseExplicit = true;
         } else if (a === '--head' && argv[i + 1]) {
             out.head = argv[++i];
+        } else if (a === '--require-base') {
+            out.requireBase = true;
         } else if (a === '--files' && argv[i + 1]) {
             out.files = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
         } else if (a === '--json') {
@@ -154,6 +156,15 @@ function main() {
     let entries;
     if (args.files) {
         entries = args.files.map((file) => ({ status: 'M', file }));
+    } else if (args.requireBase && !args.baseExplicit) {
+        diffInfo = {
+            mode: 'unresolved',
+            base: null,
+            head: args.head,
+            baselineResolved: false,
+            note: 'missing required base ref (before SHA) on dispatch; escalating to full',
+        };
+        entries = [];
     } else {
         diffInfo = resolveDiffInputs(args.base, args.head, args.baseExplicit);
         entries = getChangedFiles(diffInfo);

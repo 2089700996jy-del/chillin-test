@@ -46,16 +46,43 @@ test.describe('Auth 会话撤销与 Wrangler Cron 真实调度验证 @core', () 
         await ctxB.close();
     });
 
-    test('Wrangler 本地 --test-scheduled 双 Cron 触发（每分钟调度与每小时维护）无 5xx 异常', async ({ request }) => {
+    test('Wrangler 本地 --test-scheduled 双 Cron 触发（每分钟调度与每小时维护）真实业务效果验证', async ({ browser, request }) => {
         const { readRuntime } = await import('../src/env/ports.mjs');
         const rt = readRuntime();
         expect(rt.wranglerOrigin).toBeTruthy();
 
+        // 创建一条真实业务数据，验证每小时维护 Cron 不会误删有效数据，且每分钟 Cron 触发后系统状态正常
+        const ctx = await browser.newContext();
+        const harness = await attachPwaHarness(ctx);
+        const page = await ctx.newPage();
+        const user = uniqueUser('cron');
+        await harness.registerAndEnter(page, user);
+        const base = harness.runtime.appOrigin;
+
+        const noteRes = await page.request.post(`${base}/api/notes`, {
+            data: { title: 'Cron维护保留测试', content: '不应被每小时维护清理的有效笔记', date: '2026-11-27' },
+        });
+        expect(noteRes.ok()).toBe(true);
+        const createdNote = await noteRes.json();
+
         const minuteCron = await request.get(`${rt.wranglerOrigin}/__scheduled?cron=${encodeURIComponent('* * * * *')}`);
         expect(minuteCron.status(), '每分钟 Cron 调度返回异常状态').toBe(200);
+        const minuteBody = await minuteCron.text();
+        expect(minuteBody.toLowerCase()).not.toContain('exception');
 
         const hourlyCron = await request.get(`${rt.wranglerOrigin}/__scheduled?cron=${encodeURIComponent('13 * * * *')}`);
         expect(hourlyCron.status(), '每小时维护 Cron 调度返回异常状态').toBe(200);
+        const hourlyBody = await hourlyCron.text();
+        expect(hourlyBody.toLowerCase()).not.toContain('exception');
+
+        // 验证维护 Cron 执行后有效业务数据依然完整可读
+        const notesAfter = await page.request.get(`${base}/api/notes`);
+        expect(notesAfter.ok()).toBe(true);
+        const notesList = await notesAfter.json();
+        expect(notesList.some((n) => n.id === createdNote.id && n.title === 'Cron维护保留测试')).toBe(true);
+
+        harness.assertNoBugs('Cron 本地调度验证');
+        await ctx.close();
     });
 });
 

@@ -30,6 +30,10 @@ test('analyze-impact 安全性与边界处理：异常 ref / 全零 SHA / 缺失
     const flagInjectionReport = runAnalyzer(['--base', '--upload-pack=evil', '--head', '--help']);
     assert.equal(flagInjectionReport.baselineResolved, false);
     assert.equal(flagInjectionReport.recommendedTier, 'full');
+
+    const missingDispatchBase = runAnalyzer(['--require-base', '--head', 'HEAD']);
+    assert.equal(missingDispatchBase.baselineResolved, false);
+    assert.equal(missingDispatchBase.recommendedTier, 'full');
 });
 
 test('analyze-impact 未映射生产文件与迁移文件识别', () => {
